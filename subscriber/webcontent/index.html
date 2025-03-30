@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Yuge subscriber API</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    button {
+      margin: 5px 0;
+      padding: 5px 10px;
+    }
+
+    input {
+      margin: 5px 0;
+      padding: 5px;
+    }
+
+    pre {
+      background: #f4f4f4;
+      padding: 10px;
+      border: 1px solid #ddd;
+    }
+
+    #apiBaseContainer {
+      margin-bottom: 20px;
+    }
+
+    select {
+      margin: 5px 0;
+      padding: 5px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Yuge subscriber API</h1>
+
+  <!-- APIベースURL入力 -->
+  <div id="apiBaseContainer">
+    <label for="apiBaseInput"><strong>API base URL:</strong></label>
+    <input type="text" id="apiBaseInput" placeholder="http://localhost:8082" size="40" />
+    <button onclick="setApiBase()">Set</button>
+    <p id="apiBaseDisplay" style="color: green"></p>
+  </div>
+  <div id="feedIdContainer"></div>
+  <label for="feedIdInput"><strong>Feed ID:</strong></label>
+  <select id="feedIdInput" onchange="showSelectedFeedInfo()">
+    <option value="">Select a feed</option>
+  </select>
+  <pre id="selectedFeedInfo"></pre>
+  </div>
+
+  <!-- Post related APIs -->
+  <div id="postContent" class="tab-content active" style="display: none;">
+    <!-- GET /post -->
+    <h2>1. GET /api/feed/:feedid/post</h2>
+    <button onclick="getPostList()">Get Post List</button>
+    <pre id="postListResult"></pre>
+
+    <!-- GET /post/:did -->
+    <h2>2. GET /api/feed/:feedid/post/:did</h2>
+    <label for="getPostDid">DID:</label>
+    <input type="text" id="getPostDid" placeholder="12345" />
+    <button onclick="getPostByDid()">Get Post By DID</button>
+    <pre id="postByDidResult"></pre>
+
+    <!-- GET /post/:did/:rkey -->
+    <h2>3. GET /api/feed/:feedid/post/:did/:rkey</h2>
+    <label for="getPostDidRkey">DID:</label>
+    <input type="text" id="getPostDidRkey" placeholder="12345" />
+    <label for="getPostRkey">RKEY:</label>
+    <input type="text" id="getPostRkey" placeholder="abcde" />
+    <button onclick="getPostByDidRkey()">Get Post By DID and RKEY</button>
+    <pre id="postByDidRkeyResult"></pre>
+
+    <!-- POST /post -->
+    <h2>4. POST /api/feed/:feedid/post</h2>
+    <label for="postDid">DID:</label>
+    <input type="text" id="postPostDid" placeholder="12345" />
+    <label for="postRkey">RKEY:</label>
+    <input type="text" id="postPostRkey" placeholder="abcde" />
+    <label for="postCid">CID:</label>
+    <input type="text" id="postPostCid" placeholder="bafyreib..." />
+    <label for="postIndexedAt">IndexedAt:</label>
+    <input type="text" id="postPostIndexedAt" placeholder="2023-01-01T00:00:00Z" />
+    <button onclick="addPost()">Add Post</button>
+    <pre id="addPostResult"></pre>
+
+    <!-- DELETE /post/:did -->
+    <h2>5. DELETE /api/feed/:feedid/post/:did</h2>
+    <label for="deletePostDid">DID:</label>
+    <input type="text" id="deletePostDid" placeholder="12345" />
+    <button onclick="deletePostByDid()">Delete Post By DID</button>
+    <pre id="deletePostByDidResult"></pre>
+
+    <!-- DELETE /post/:did/:rkey -->
+    <h2>6. DELETE /api/feed/:feedid/post/:did/:rkey</h2>
+    <label for="deletePostDidRkey">DID:</label>
+    <input type="text" id="deletePostDidRkey" placeholder="12345" />
+    <label for="deletePostRkey">RKEY:</label>
+    <input type="text" id="deletePostRkey" placeholder="abcde" />
+    <button onclick="deletePostByDidRkey()">Delete Post By DID and RKEY</button>
+    <pre id="deletePostByDidRkeyResult"></pre>
+  </div>
+
+  <style>
+    .tab-buttons {
+      margin-bottom: 20px;
+    }
+
+    .tab-button {
+      padding: 10px 20px;
+      margin-right: 10px;
+      border: none;
+      background: #f0f0f0;
+      cursor: pointer;
+    }
+
+    .tab-button.active {
+      background: #333;
+      color: white;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+  </style>
+
+  <script>
+    function switchTab(tabName) {
+      // switch tab button active status
+      document.querySelectorAll('.tab-button').forEach(button => {
+        button.classList.remove('active');
+      });
+      document.getElementById(tabName + 'Tab').classList.add('active');
+
+      // switch content display
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.getElementById(tabName + 'Content').classList.add('active');
+    }
+  </script>
+
+  <script>
+    let apiBase = "";
+    let feedList = [];
+
+    function showSelectedFeedInfo() {
+      const feedId = document.getElementById("feedIdInput").value;
+      const selectedFeed = feedList.find(feed => feed.id === feedId);
+      if (selectedFeed) {
+        // Format feed info for display
+        const feedInfo = {
+          "Feed ID": selectedFeed.id,
+          "URI": selectedFeed.definition.uri,
+          "Config File": selectedFeed.definition.configFile,
+          "Inactive Start": selectedFeed.definition.inactiveStart || false,
+          "Status": {
+            "Status": selectedFeed.status.lastStatus,
+            "Last Updated": selectedFeed.status.lastUpdated
+          }
+        };
+        document.getElementById("selectedFeedInfo").innerText = JSON.stringify(feedInfo, null, 2);
+      } else {
+        document.getElementById("selectedFeedInfo").innerText = "";
+      }
+    }
+
+    // set API base URL
+    async function setApiBase() {
+      const input = document.getElementById("apiBaseInput").value.trim();
+      if (input) {
+        apiBase = input;
+        document.getElementById(
+          "apiBaseDisplay"
+        ).innerText = `Current API base URL: ${apiBase}`;
+
+        // get feed info and display
+        try {
+          const res = await fetch(`${apiBase}/api/feed/`);
+          const data = await res.json();
+
+          // update feed ID select options
+          const feedIdSelect = document.getElementById("feedIdInput");
+          feedIdSelect.innerHTML = '<option value="">Select a feed</option>';
+
+          // Add all available feed IDs to select options
+          if (Array.isArray(data)) {
+            feedList = data;
+            data.forEach(feed => {
+              const option = document.createElement('option');
+              option.value = feed.id;
+              option.textContent = feed.id;
+              feedIdSelect.appendChild(option);
+            });
+          }
+
+          // If there's a default feedId, select it
+          const defaultFeed = data[0];
+          if (defaultFeed) {
+            feedIdSelect.value = defaultFeed.id;
+            showSelectedFeedInfo();
+            document.getElementById("postContent").style.display = "block";
+          }
+        } catch (error) {
+          document.getElementById("feedInfoResult").innerText = "Failed to get feed info.";
+        }
+      } else {
+        alert("Please input API base URL.");
+      }
+    }
+
+    // Post related functions
+    async function getPostList() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      if (!feedid) {
+        alert("Please input feed ID.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post`);
+      const data = await res.text();
+      document.getElementById("postListResult").innerText = data;
+    }
+
+    async function getPostByDid() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      const did = document.getElementById("getPostDid").value;
+      if (!feedid || !did) {
+        alert("Please input feed ID and DID.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}`);
+      const data = await res.text();
+      document.getElementById("postByDidResult").innerText = data;
+    }
+
+    async function getPostByDidRkey() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      const did = document.getElementById("getPostDidRkey").value;
+      const rkey = document.getElementById("getPostRkey").value;
+      if (!feedid || !did || !rkey) {
+        alert("Please input feed ID, DID and RKEY.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`);
+      const data = await res.text();
+      document.getElementById("postByDidRkeyResult").innerText = data;
+    }
+
+    async function addPost() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      const did = document.getElementById("postPostDid").value;
+      const rkey = document.getElementById("postPostRkey").value;
+      if (!feedid || !did || !rkey) {
+        alert("Please input feed ID, DID and RKEY.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`, {
+        method: "POST",
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          cid: document.getElementById("postPostCid").value,
+          indexedAt: document.getElementById("postPostIndexedAt").value || new Date().toISOString()
+        })
+      });
+      const data = await res.text();
+      document.getElementById("addPostResult").innerText = data;
+    }
+
+    async function deletePostByDid() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      const did = document.getElementById("deletePostDid").value;
+      if (!feedid || !did) {
+        alert("Please input feed ID and DID.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}`, {
+        method: "DELETE"
+      });
+      const data = await res.text();
+      document.getElementById("deletePostByDidResult").innerText = data;
+    }
+
+    async function deletePostByDidRkey() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = document.getElementById("feedIdInput").value;
+      const did = document.getElementById("deletePostDidRkey").value;
+      const rkey = document.getElementById("deletePostRkey").value;
+      if (!feedid || !did || !rkey) {
+        alert("Please input feed ID, DID and RKEY.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`, {
+        method: "DELETE"
+      });
+      const data = await res.text();
+      document.getElementById("deletePostByDidRkeyResult").innerText = data;
+    }
+
+    // set API base URL from href
+    window.onload = function () {
+      const currentUrl = window.location.href;
+      const url = new URL(currentUrl);
+      document.getElementById("apiBaseInput").value = url.origin;
+    };
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,53 @@
+# Stage 0: Import SSL certificates
+FROM alpine:latest as certs
+
+RUN apk --update add ca-certificates
+
+# Stage 1: Build the Go binary
+FROM golang:1.24 AS builder
+
+# Create a directory for the application
+WORKDIR /app
+
+RUN mkdir data
+
+# Fetch dependencies
+COPY go.mod go.sum ./
+
+RUN go mod download
+COPY Makefile ./
+COPY types ./types
+COPY cmd/yuge_subscriber ./cmd/yuge_subscriber
+COPY feed ./feed
+COPY subscriber ./subscriber
+
+# Build the application
+RUN make sbsc-build
+
+# Stage 2: Build a minimal Docker image
+FROM debian:stable-slim
+WORKDIR /app
+
+# Create data and config directory and set permissions
+RUN mkdir -p /app/data /app/config
+
+# Create a non-root user and group with specific UID/GID
+RUN groupadd -r -g 1000 appuser && useradd -r -u 1000 -g appuser appuser
+
+# Set ownership and permissions for the data directory
+RUN chown -R appuser:appuser /app \
+    && chmod 755 /app \
+    && chmod 775 /app/data \
+    && chmod 775 /app/config
+
+# Import the SSL certificates from the first stage.
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+# Copy the binary from the first stage.
+COPY --from=builder /app/bin/yuge_subscriber .
+
+# Switch to non-root user
+USER appuser
+
+# Set the startup command to run the binary
+CMD ["./yuge_subscriber", "run"]
