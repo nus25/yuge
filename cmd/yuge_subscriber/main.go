@@ -53,24 +53,6 @@ func run(args []string) {
 						EnvVars: []string{"CF_ACCESS_CLIENT_SECRET"},
 					},
 					&cli.StringFlag{
-						Name:    "feed-editor-token",
-						Usage:   "Bearer token for feed editor",
-						Value:   "",
-						EnvVars: []string{"FEED_EDITOR_TOKEN"},
-					},
-					&cli.StringFlag{
-						Name:    "feed-editor-username",
-						Usage:   "Basic auth username for feed editor",
-						Value:   "",
-						EnvVars: []string{"FEED_EDITOR_USERNAME"},
-					},
-					&cli.StringFlag{
-						Name:    "feed-editor-password",
-						Usage:   "Basic auth password for feed editor",
-						Value:   "",
-						EnvVars: []string{"FEED_EDITOR_PASSWORD"},
-					},
-					&cli.StringFlag{
 						Name:    "jetstream-url",
 						Usage:   "full websocket path to the jetstream endpoint",
 						Value:   "ws://localhost:6009/subscribe",

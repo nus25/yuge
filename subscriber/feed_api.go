@@ -421,8 +421,9 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 
 	// POSTデータを受け取る
 	var req struct {
-		CID       string `json:"cid"`
-		IndexedAt string `json:"indexedAt"`
+		CID       string   `json:"cid"`
+		IndexedAt string   `json:"indexedAt"`
+		Langs     []string `json:"langs,omitempty"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -456,7 +457,7 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 		t = time.Now()
 	}
 
-	if err := fi.Feed.AddPost(did, rkey, req.CID, t); err != nil {
+	if err := fi.Feed.AddPost(did, rkey, req.CID, t, req.Langs); err != nil {
 		c.JSON(500, gin.H{"error": "failed to add post"})
 		return
 	}

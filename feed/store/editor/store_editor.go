@@ -25,6 +25,7 @@ type PostParams struct {
 	Rkey      string
 	Cid       string
 	IndexedAt time.Time
+	Langs     []string
 }
 
 type DeleteParams struct {

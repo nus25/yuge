@@ -454,14 +454,21 @@ func TestAPIHandler_PostOperations(t *testing.T) {
 	testDid := "did:plc:test123"
 	testRkey := "testrkey456"
 	testUri := "at://" + testDid + "/app.bsky.feed.post/" + testRkey
-	postData := map[string]interface{}{
-		"cid":       "bafyreia1",
-		"indexedAt": "2024-01-01T00:00:00Z",
+	postData := struct {
+		CID       string   `json:"cid"`
+		IndexedAt string   `json:"indexedAt"`
+		Langs     []string `json:"langs,omitempty"`
+	}{
+		CID:       "bafyreia1",
+		IndexedAt: "2024-01-01T00:00:00Z",
+		Langs:     []string{"en", "jp"},
 	}
 
 	req, _ = http.NewRequest("POST", "/api2/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(createJSONBody(t, postData))
+	jsonData, _ := json.Marshal(postData)
+	body := bytes.NewBuffer(jsonData)
+	req.Body = io.NopCloser(body)
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 

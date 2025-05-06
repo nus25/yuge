@@ -26,7 +26,7 @@ const (
 type Feed interface {
 	FeedId() string
 	FeedUri() string
-	AddPost(did string, rkey string, cid string, t time.Time) error
+	AddPost(did string, rkey string, cid string, t time.Time, langs []string) error
 	DeletePost(did string, rkey string) error
 	DeletePostByDid(did string) (deleted []types.Post, err error)
 	GetPost(did string, rkey string) (post types.Post, exists bool)
@@ -185,8 +185,8 @@ func (f *feedImpl) Clear() error {
 	return nil
 }
 
-func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time) error {
-	return f.store.Add(did, rkey, cid, t)
+func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {
+	return f.store.Add(did, rkey, cid, t, langs)
 }
 
 func (f *feedImpl) DeletePost(did string, rkey string) error {

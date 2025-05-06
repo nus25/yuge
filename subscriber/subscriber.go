@@ -65,15 +65,13 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		var opts []editor.ClientOptionFunc
 		if cctx.String("feed-editor-cf-id") != "" {
 			opts = append(opts, editor.WithCfToken(cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret")))
-		} else if cctx.String("feed-editor-token") != "" {
-			opts = append(opts, editor.WithBearerToken(cctx.String("feed-editor-token")))
-		} else if cctx.String("feed-editor-username") != "" {
-			opts = append(opts, editor.WithBasicAuth(cctx.String("feed-editor-username"), cctx.String("feed-editor-password")))
 		}
 		se, err = editor.NewGyokaEditor(cctx.String("feed-editor-endpoint"), logger, opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create gyoka editor: %w", err)
 		}
+	} else {
+		logger.Info("feed editor endpoint is not set. run local mode.")
 	}
 	// if no feed editor endpoint, use file editor
 	if se == nil {

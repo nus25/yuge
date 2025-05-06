@@ -28,7 +28,7 @@ type Store interface {
 	SetFeedUri(uri types.FeedUri)
 
 	// Add a new post
-	Add(did string, rkey string, cid string, t time.Time) error
+	Add(did string, rkey string, cid string, t time.Time, langs []string) error
 
 	// Delete specified post
 	Delete(did string, rkey string) error
@@ -213,7 +213,7 @@ func (s *StoreImpl) listPost(did string) []types.Post {
 	return filteredPosts
 }
 
-func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time) error {
+func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -226,6 +226,7 @@ func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time) error 
 		Uri:       types.PostUri(uri),
 		Cid:       cid,
 		IndexedAt: t.UTC().Format(time.RFC3339Nano),
+		//Language is not supported in cache
 	}
 
 	s.posts = append(s.posts, post)
@@ -238,6 +239,7 @@ func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time) error 
 			Rkey:      rkey,
 			Cid:       cid,
 			IndexedAt: t,
+			Langs:     langs,
 		}); err != nil {
 			return err
 		}

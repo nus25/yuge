@@ -1,6 +1,6 @@
 module github.com/nus25/yuge
 
-go 1.24.0
+go 1.24.2
 
 require (
 	github.com/bluesky-social/indigo v0.0.0-20250211193014-79a0357342cf
@@ -11,15 +11,15 @@ require (
 	github.com/goccy/go-yaml v1.15.22
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.17.11
-	github.com/nus25/gyoka-client/go v0.0.0-20250223110036-1509f217d493
+	github.com/nus25/gyoka-client/go v0.0.0-20250505102658-53f9fe4b3eed
 	github.com/prometheus/client_golang v1.20.5
 	github.com/urfave/cli/v2 v2.27.5
 	go.uber.org/atomic v1.11.0
 	golang.org/x/sync v0.11.0
-
 )
 
 require (
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.12.8 // indirect
 	github.com/bytedance/sonic/loader v0.2.3 // indirect
@@ -67,6 +67,7 @@ require (
 	github.com/multiformats/go-multihash v0.2.3 // indirect
 	github.com/multiformats/go-varint v0.0.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/polydawn/refmt v0.89.1-0.20221221234430-40501e09de1f // indirect

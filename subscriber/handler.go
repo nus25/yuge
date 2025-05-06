@@ -99,7 +99,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 			if fi.Status.LastStatus != FeedStatusActive || fi.Feed == nil {
 				continue
 			}
-			sd, err := func() (bool, error) {
+			sd, post, err := func() (bool, *apibsky.FeedPost, error) {
 				// if panic occured set error status to the feed
 				defer func() {
 					if r := recover(); r != nil {
@@ -108,7 +108,12 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 						return
 					}
 				}()
-				return h.shouldAdd(fi.Feed, evt)
+				var post apibsky.FeedPost
+				if err := json.Unmarshal(evt.Commit.Record, &post); err != nil {
+					return false, nil, fmt.Errorf("failed to unmarshal post: %w", err)
+				}
+				ok, err := h.shouldAdd(fi.Feed, evt.Did, evt.Commit.RKey, &post)
+				return ok, &post, err
 			}()
 			if err != nil {
 				h.logger.Error("failed to check if post should be added", "error", err, "feed", id)
@@ -116,8 +121,8 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 			}
 			if sd {
 				postsAdded.WithLabelValues(id).Inc()
-				h.logger.Info("adding post", "feed", id, "did", evt.Did, "rkey", evt.Commit.RKey)
-				if err := fi.Feed.AddPost(evt.Did, evt.Commit.RKey, evt.Commit.CID, time.Now()); err != nil {
+				h.logger.Info("adding post", "feed", id, "did", evt.Did, "rkey", evt.Commit.RKey, "Langs", post.Langs)
+				if err := fi.Feed.AddPost(evt.Did, evt.Commit.RKey, evt.Commit.CID, time.Now(), post.Langs); err != nil {
 					h.logger.Error("failed to add post", "error", err, "feed", id)
 					continue
 				}
@@ -142,12 +147,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 }
 
 // フィードで定義された判定ロジックでevtをフィルタする
-func (h *Handler) shouldAdd(feed feed.Feed, evt *models.Event) (shuldAdd bool, err error) {
-	var post apibsky.FeedPost
-	if err := json.Unmarshal(evt.Commit.Record, &post); err != nil {
-		return false, fmt.Errorf("failed to unmarshal post: %w", err)
-	}
-
+func (h *Handler) shouldAdd(feed feed.Feed, did string, rkey string, post *apibsky.FeedPost) (shuldAdd bool, err error) {
 	defer func() {
 		if shuldAdd {
 			h.logger.Debug("post found", "feed", feed.FeedId(), "text", post.Text)
@@ -157,7 +157,7 @@ func (h *Handler) shouldAdd(feed feed.Feed, evt *models.Event) (shuldAdd bool, e
 	if post.Text != "" {
 		timer := prometheus.NewTimer(feedLogicLatency.WithLabelValues(feed.FeedId()))
 		defer timer.ObserveDuration()
-		return feed.Test(evt.Did, evt.Commit.RKey, &post), nil
+		return feed.Test(did, rkey, post), nil
 	}
 
 	return false, nil

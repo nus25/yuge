@@ -88,8 +88,9 @@ func TestStore(t *testing.T) {
 		rkey := "test1"
 		cid := "bafyreia"
 		now := time.Now()
+		langs := []string{"jp", "en"}
 
-		err = s.Add(did, rkey, cid, now)
+		err = s.Add(did, rkey, cid, now, langs)
 		if err != nil {
 			t.Fatalf("failed to add post: %v", err)
 		}
@@ -144,7 +145,7 @@ func TestStore(t *testing.T) {
 				did := "did:plc:1234"
 				rkey := fmt.Sprintf("test%d", i)
 				cid := fmt.Sprintf("bafyreia%d", i)
-				err := s.Add(did, rkey, cid, time.Now())
+				err := s.Add(did, rkey, cid, time.Now(), []string{"jp", "us"})
 				if err != nil {
 					t.Errorf("failed to add post: %v", err)
 				}
@@ -178,8 +179,9 @@ func TestStore(t *testing.T) {
 		rkey := "test1"
 		cid := "bafyreia"
 		now := time.Now()
+		langs := []string{"jp", "en"}
 
-		err = s.Add(did, rkey, cid, now)
+		err = s.Add(did, rkey, cid, now, langs)
 		if err != nil {
 			t.Fatalf("failed to add post: %v", err)
 		}
@@ -213,17 +215,18 @@ func TestList(t *testing.T) {
 		did1 := "did:plc:1234"
 		did2 := "did:plc:5678"
 		posts := []struct {
-			did  string
-			rkey string
-			cid  string
+			did   string
+			rkey  string
+			cid   string
+			langs []string
 		}{
-			{did1, "test1", "bafyreia1"},
-			{did1, "test2", "bafyreia2"},
-			{did2, "test3", "bafyreia3"},
+			{did1, "test1", "bafyreia1", []string{"jp"}},
+			{did1, "test2", "bafyreia2", nil},
+			{did2, "test3", "bafyreia3", []string{}},
 		}
 
 		for _, p := range posts {
-			err := s.Add(p.did, p.rkey, p.cid, time.Now())
+			err := s.Add(p.did, p.rkey, p.cid, time.Now(), p.langs)
 			if err != nil {
 				t.Fatalf("failed to add post: %v", err)
 			}
@@ -286,17 +289,18 @@ func TestDeleteByDid(t *testing.T) {
 		did1 := "did:plc:1234"
 		did2 := "did:plc:5678"
 		posts := []struct {
-			did  string
-			rkey string
-			cid  string
+			did   string
+			rkey  string
+			cid   string
+			langs []string
 		}{
-			{did1, "test1", "bafyreia1"},
-			{did1, "test2", "bafyreia2"},
-			{did2, "test3", "bafyreia3"},
+			{did1, "test1", "bafyreia1", []string{"jp"}},
+			{did1, "test2", "bafyreia2", []string{"jp"}},
+			{did2, "test3", "bafyreia3", []string{"jp"}},
 		}
 
 		for _, p := range posts {
-			err := s.Add(p.did, p.rkey, p.cid, time.Now())
+			err := s.Add(p.did, p.rkey, p.cid, time.Now(), p.langs)
 			if err != nil {
 				t.Fatalf("failed to add post: %v", err)
 			}

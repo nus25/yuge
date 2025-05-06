@@ -43,7 +43,7 @@ func TestFeedIntegration(t *testing.T) {
 	}
 
 	// Add post
-	err = feed.AddPost("did:plc:user1", "post1", "cid1", time.Now())
+	err = feed.AddPost("did:plc:user1", "post1", "cid1", time.Now(), []string{"en", "fr"})
 	if err != nil {
 		t.Errorf("Failed to add post: %v", err)
 	}
@@ -81,9 +81,18 @@ func TestFeedIntegration(t *testing.T) {
 	}
 
 	// delete post by did
-	err = feed.AddPost("did:plc:user1", "post1", "cid1", time.Now())
-	err = feed.AddPost("did:plc:user2", "post2", "cid2", time.Now())
-	err = feed.AddPost("did:plc:user2", "post3", "cid3", time.Now())
+	err = feed.AddPost("did:plc:user1", "post1", "cid1", time.Now(), []string{"en", "fr"})
+	if err != nil {
+		t.Errorf("Failed to delete post: %v", err)
+	}
+	err = feed.AddPost("did:plc:user2", "post2", "cid2", time.Now(), []string{"jp"})
+	if err != nil {
+		t.Errorf("Failed to delete post: %v", err)
+	}
+	err = feed.AddPost("did:plc:user2", "post3", "cid3", time.Now(), nil)
+	if err != nil {
+		t.Errorf("Failed to delete post: %v", err)
+	}
 	deleted, err := feed.DeletePostByDid("did:plc:user2")
 	if err != nil {
 		t.Errorf("Failed to delete post: %v", err)

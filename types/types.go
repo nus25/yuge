@@ -7,10 +7,11 @@ import (
 )
 
 type Post struct {
-	Feed      FeedUri `json:"feed,omitempty"`
-	Uri       PostUri `json:"uri"`
-	Cid       string  `json:"cid"`
-	IndexedAt string  `json:"indexedAt"`
+	Feed      FeedUri  `json:"feed,omitempty"`
+	Uri       PostUri  `json:"uri"`
+	Cid       string   `json:"cid"`
+	IndexedAt string   `json:"indexedAt"`
+	Langs     []string `json:"langs,omitempty"`
 }
 
 type FeedUri string
