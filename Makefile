@@ -2,10 +2,10 @@ GO_CMD = CGO_ENABLED=0 GOOS=linux go
 PREFIX_SUBSCRIBER = sbsc-
 YUGE_SUBSCRIBER_VERSION=$(shell cat ./cmd/yuge_subscriber/version.txt)
 # Run tests
-.PHONY: $(PREFIX_SUBSCRIBER)test
-$(PREFIX_SUBSCRIBER)test:
+.PHONY: test
+test:
 	@echo "Running tests..."
-	$(GO_CMD) test github.com/nus25/yuge/subscriber
+	$(GO_CMD) test github.com/nus25/yuge/...
 
 # Build subscriber
 .PHONY: $(PREFIX_SUBSCRIBER)build
