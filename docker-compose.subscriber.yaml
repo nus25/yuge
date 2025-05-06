@@ -8,8 +8,10 @@ services:
     container_name: yuge_subscriber
     environment:
       - JETSTREAM_WS_URL=${JETSTREAM_WS_URL}
-      - FEED_SYNC_ENDPOINT=${FEED_SYNC_ENDPOINT}
+      - FEED_EDITOR_ENDPOINT=${FEED_EDITOR_ENDPOINT}
       - SUBSCRIBER_LOG_LEVEL=${LOG_LEVEL}
+      - CF_ACCESS_CLIENT_ID=${CF_ACCESS_CLIENT_ID}
+      - CF_ACCESS_CLIENT_SECRET=${CF_ACCESS_CLIENT_SECRET}
     ports:
       - "8082:8082"
       - "9102:9102"
