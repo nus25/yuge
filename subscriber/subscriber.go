@@ -66,6 +66,9 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		if cctx.String("feed-editor-cf-id") != "" {
 			opts = append(opts, editor.WithCfToken(cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret")))
 		}
+		if cctx.String("gyoka-api-key") != "" {
+			opts = append(opts, editor.WithApiKey(cctx.String("gyoka-api-key")))
+		}
 		se, err = editor.NewGyokaEditor(cctx.String("feed-editor-endpoint"), logger, opts...)
 		if err != nil {
 			return fmt.Errorf("failed to create gyoka editor: %w", err)

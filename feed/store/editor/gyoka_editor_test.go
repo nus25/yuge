@@ -231,7 +231,77 @@ func TestAuthHeaders(t *testing.T) {
 			t.Error("error in request")
 		}
 	})
+	t.Run("Apikey", func(t *testing.T) {
+		testKey := "test-key"
+		// test server
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Api-Key") != testKey {
+				t.Errorf("X-Api-Key in header mismatching %s", r.Header.Get("X-Api-Key"))
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "Gyoka is available",
+			})
+		})
+		server := httptest.NewServer(mux)
+		defer server.Close()
 
+		// test client
+		client, err := NewGyokaEditor(server.URL, logger, WithApiKey(testKey))
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+		if client.client == nil {
+			t.Error("client is nil")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		err = client.Open(ctx)
+		if err != nil {
+			t.Error("error in request")
+		}
+	})
+	t.Run("Both", func(t *testing.T) {
+		testId := "test-id"
+		testSecret := "test-secret"
+		testKey := "test-key"
+		// test server
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("CF-Access-Client-Id") != testId {
+				t.Errorf("CF-Access-Client-Id in header mismatching %s", r.Header.Get("CF-Access-Client-Id"))
+			}
+			if r.Header.Get("CF-Access-Client-Secret") != testSecret {
+				t.Errorf("CF-Access-Client-Secret in header mismatching %s", r.Header.Get("CF-Access-Client-Secret"))
+			}
+			if r.Header.Get("X-Api-Key") != testKey {
+				t.Errorf("X-Api-Key in header mismatching %s", r.Header.Get("X-Api-Key"))
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "Gyoka is available",
+			})
+		})
+		server := httptest.NewServer(mux)
+		defer server.Close()
+		var opts []ClientOptionFunc
+		opts = append(opts, WithCfToken(testId, testSecret), WithApiKey(testKey))
+		// test client
+		client, err := NewGyokaEditor(server.URL, logger, opts...)
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+		if client.client == nil {
+			t.Error("client is nil")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		err = client.Open(ctx)
+		if err != nil {
+			t.Error("error in request")
+		}
+	})
 	t.Run("NoAuth", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {

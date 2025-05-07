@@ -72,8 +72,7 @@ type AuthType int
 const (
 	NoAuth AuthType = iota
 	CloudflareAccess
-	BearerToken
-	BasicAuth
+	GyokaApiKey
 )
 
 func WithCfToken(clientID string, clientSecret string) ClientOptionFunc {
@@ -82,6 +81,15 @@ func WithCfToken(clientID string, clientSecret string) ClientOptionFunc {
 		opt.credentials = map[string]string{
 			"clientId":     clientID,
 			"clientSecret": clientSecret,
+		}
+	}
+}
+
+func WithApiKey(key string) ClientOptionFunc {
+	return func(opt *ClientOption) {
+		opt.authType = GyokaApiKey
+		opt.credentials = map[string]string{
+			"apiKey": key,
 		}
 	}
 }
@@ -109,18 +117,19 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		credentials: make(map[string]string),
 	}
 
+	//Set custom auth headers
+	ch := make(map[string]string)
 	for _, o := range opts {
 		if o != nil {
 			o(opt)
+			switch opt.authType {
+			case CloudflareAccess:
+				ch["CF-Access-Client-Id"] = opt.credentials["clientId"]
+				ch["CF-Access-Client-Secret"] = opt.credentials["clientSecret"]
+			case GyokaApiKey:
+				ch["X-API-Key"] = opt.credentials["apiKey"]
+			}
 		}
-	}
-
-	//Set custom auth headers
-	ch := make(map[string]string)
-	switch opt.authType {
-	case CloudflareAccess:
-		ch["CF-Access-Client-Id"] = opt.credentials["clientId"]
-		ch["CF-Access-Client-Secret"] = opt.credentials["clientSecret"]
 	}
 
 	// editor.ClientOptionの作成
@@ -273,7 +282,7 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 		switch resp.StatusCode() {
 		case 200:
 			return nil
-		case 400, 404, 500:
+		case 400, 401, 404, 500:
 			return fmt.Errorf("request error: %s", string(resp.Body))
 		default:
 			return fmt.Errorf("unexpected request error: %s", string(resp.Body))
@@ -295,7 +304,7 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 		switch resp.StatusCode() {
 		case 200:
 			return nil
-		case 400, 404, 500:
+		case 400, 401, 404, 500:
 			return fmt.Errorf("request error: %s", string(resp.Body))
 		default:
 			return fmt.Errorf("unexpected request error: %s", string(resp.Body))
@@ -313,7 +322,7 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 		switch resp.StatusCode() {
 		case 200:
 			return nil
-		case 400, 404, 500:
+		case 400, 401, 404, 500:
 			return fmt.Errorf("request error: %s", string(resp.Body))
 		default:
 			return fmt.Errorf("unexpected request error: %s", string(resp.Body))
@@ -346,14 +355,17 @@ func (e *GyokaEditor) Load(ctx context.Context, params LoadParams) ([]types.Post
 			e.logger.Info("load posts from gyoka succeed", "feed", resp.JSON200.Feed, "cursor", resp.JSON200.Cursor)
 		case 400:
 			// Bad request: log and return error
-			e.logger.Error("bad request to GetGetPosts", "error", resp.JSON400.Error, "message", resp.JSON400.Message)
+			e.logger.Error("failed to load posts.", "error", resp.JSON400.Error, "message", resp.JSON400.Message)
 			return nil, fmt.Errorf("bad request: %d", resp.StatusCode())
+		case 401:
+			e.logger.Error("failed to load posts.", "error", resp.JSON401.Error, "message", resp.JSON401.Message)
+			return nil, fmt.Errorf("unauthorized: %d", resp.StatusCode())
 		case 404:
-			e.logger.Error("Unknown feed. Feed may not be registered in gyoka", "error", resp.JSON404.Error, "message", resp.JSON404.Message)
-			return nil, fmt.Errorf("bad request: %d", resp.StatusCode())
+			e.logger.Error("failed to load posts. Feed may not be registered in gyoka", "error", resp.JSON404.Error, "message", resp.JSON404.Message)
+			return nil, fmt.Errorf("not found: %d", resp.StatusCode())
 		case 500:
 			// Internal server error: log and return error
-			e.logger.Error("internal server error from GetGetPosts", "error", resp.JSON500.Error, "message", resp.JSON500.Message)
+			e.logger.Error("failed to load posts. Gyoka server has some problem", "error", resp.JSON500.Error, "message", resp.JSON500.Message)
 			return nil, fmt.Errorf("internal server error: %d", resp.StatusCode())
 		default:
 			// Other status: log and return error

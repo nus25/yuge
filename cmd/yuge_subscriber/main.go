@@ -53,6 +53,12 @@ func run(args []string) {
 						EnvVars: []string{"CF_ACCESS_CLIENT_SECRET"},
 					},
 					&cli.StringFlag{
+						Name:    "gyoka-api-key",
+						Usage:   "Gyoka API key",
+						Value:   "",
+						EnvVars: []string{"GYOKA_API_KEY"},
+					},
+					&cli.StringFlag{
 						Name:    "jetstream-url",
 						Usage:   "full websocket path to the jetstream endpoint",
 						Value:   "ws://localhost:6009/subscribe",

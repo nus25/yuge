@@ -158,8 +158,8 @@ github.com/multiformats/go-varint v0.0.7 h1:sWSGR+f/eu5ABZA2ZpYKBILXTTs9JWpdEM/n
 github.com/multiformats/go-varint v0.0.7/go.mod h1:r8PUYw/fD/SjBCiKOoDlGF6QawOELpZAu9eioSos/OU=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/nus25/gyoka-client/go v0.0.0-20250505102658-53f9fe4b3eed h1:NoGo/qA/3P1IXIhBBdaO9MRU+5UWbQQMM5WiOYLCD1c=
-github.com/nus25/gyoka-client/go v0.0.0-20250505102658-53f9fe4b3eed/go.mod h1:SGB+gWX1mvSHwbYT9QjnmwH50dEhFA70eUShe2UrKgk=
+github.com/nus25/gyoka-client/go v0.0.0-20250506102131-3a47efb17a97 h1:nCfU76iT2XmuuN7HvgPmBjaAiRSBmXD9yDs3a5XSDVA=
+github.com/nus25/gyoka-client/go v0.0.0-20250506102131-3a47efb17a97/go.mod h1:SGB+gWX1mvSHwbYT9QjnmwH50dEhFA70eUShe2UrKgk=
 github.com/oapi-codegen/runtime v1.1.1 h1:EXLHh0DXIJnWhdRPN2w4MXAzFyE4CskzhNLUmtpMYro=
 github.com/oapi-codegen/runtime v1.1.1/go.mod h1:SK9X900oXmPWilYR5/WKPzt3Kqxn/uS/+lbpREv+eCg=
 github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+1B0VhjKrZUs=
