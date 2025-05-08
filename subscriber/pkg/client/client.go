@@ -111,6 +111,9 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 	fullURL := c.config.WebsocketURL
 	c.logger.Info("fullurl: " + fullURL)
 	params := []string{}
+	if c.config.Compress {
+		params = append(params, "compress=true")
+	}
 	c.Cursor = cursor
 	if c.Cursor > 0 {
 		params = append(params, fmt.Sprintf("cursor=%d", c.Cursor))

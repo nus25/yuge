@@ -70,6 +70,12 @@ func run(args []string) {
 						Value:   -1,
 						EnvVars: []string{"OVERRIDE_CURSOR"},
 					},
+					&cli.BoolFlag{
+						Name:    "jetstream-commpression",
+						Usage:   "enable compression of jetstream",
+						Value:   true,
+						EnvVars: []string{"JETSTREAM_COMPRESSION"},
+					},
 					&cli.StringFlag{
 						Name:    "config-directory-path",
 						Usage:   "config directory path",

@@ -113,8 +113,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	config := jetstreamClient.DefaultClientConfig()
 	config.WantedCollections = []string{"app.bsky.feed.post"}
 	config.WebsocketURL = u.String()
-	// compressはメモリ使用量が上がるので使用しない
-	config.Compress = false
+	config.Compress = cctx.Bool("jetstream-commpression")
 	// 受信を非同期にしてイベント受信の負荷を緩和する
 	sched := parallel.NewScheduler(1, "jetstream_client", logger, h.HandlePostEvent)
 	defer sched.Shutdown()
