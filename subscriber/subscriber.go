@@ -18,7 +18,7 @@ import (
 	"github.com/nus25/yuge/feed/store/editor"
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
-	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/sequential"
+	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 )
@@ -109,14 +109,14 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	// handler
 	h := NewHandler(logger, fs)
 
-	//setup jetstream client
+	// setup jetstream client
 	config := jetstreamClient.DefaultClientConfig()
 	config.WantedCollections = []string{"app.bsky.feed.post"}
 	config.WebsocketURL = u.String()
 	// compressはメモリ使用量が上がるので使用しない
 	config.Compress = false
-
-	sched := sequential.NewScheduler("jetstream_client", logger, h.HandlePostEvent)
+	// 受信を非同期にしてイベント受信の負荷を緩和する
+	sched := parallel.NewScheduler(1, "jetstream_client", logger, h.HandlePostEvent)
 	defer sched.Shutdown()
 	jsc, err := jetstreamClient.NewClient(config, log, sched)
 	if err != nil {

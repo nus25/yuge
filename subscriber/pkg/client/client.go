@@ -222,7 +222,7 @@ func (c *Client) readLoop(ctx context.Context) error {
 				return fmt.Errorf("failed to unmarshal event: %w", err)
 			}
 
-			if err := c.Scheduler.AddWork(ctx, event.Did, &event); err != nil {
+			if err := c.Scheduler.AddWork(ctx, "jetstream_repo", &event); err != nil {
 				c.logger.Error("failed to add work to scheduler", "error", err)
 				return fmt.Errorf("failed to add work to scheduler: %w", err)
 			}
