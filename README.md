@@ -1,5 +1,6 @@
 # Yuge
-This is currently a personal project in development. Currently not working standalone.
+This is currently a personal project in development. 
+Yuge currently works with [Gyoka](https://github.com/nus25/gyoka).
 
 Yugeは、[Bluesky](https://bsky.app)のカスタムフィードを作成・管理するためのサーバーアプリケーションです。
 (Yuge: 湯気 /jɯ̟ɡe/, steam form hot water)
