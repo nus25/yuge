@@ -3,10 +3,12 @@ package editor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,6 +191,219 @@ func TestGyokaEditor(t *testing.T) {
 			}
 
 			time.Sleep(100 * time.Millisecond) // リクエストの処理を待つ
+		})
+	}
+}
+
+func TestRetryFunctionality(t *testing.T) {
+	logger := slog.Default()
+
+	t.Run("AddPost_RetryOnServerError", func(t *testing.T) {
+		var attemptCount int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/gyoka/ping" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"message": "Gyoka is available",
+				})
+				return
+			}
+
+			atomic.AddInt32(&attemptCount, 1)
+			if atomic.LoadInt32(&attemptCount) < 3 {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":   "internal_error",
+					"message": "server error",
+				})
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "success",
+			})
+		}))
+		defer server.Close()
+
+		client, err := NewGyokaEditor(server.URL, logger, WithRetryWaitTime(100*time.Microsecond))
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := client.Open(ctx); err != nil {
+			t.Fatalf("failed to open client: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+
+		err = client.Add(PostParams{
+			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
+			Did:       "did:plc:test",
+			Rkey:      "test",
+			Cid:       "test-cid",
+			IndexedAt: time.Now(),
+			Langs:     []string{"en"},
+		})
+
+		if err != nil {
+			t.Errorf("expected success after retries, got error: %v", err)
+		}
+
+		finalAttempts := atomic.LoadInt32(&attemptCount)
+		if finalAttempts != 3 {
+			t.Errorf("expected 3 attempts, got %d", finalAttempts)
+		}
+	})
+
+	t.Run("AddPost_NoRetryOnClientError", func(t *testing.T) {
+		var attemptCount int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/gyoka/ping" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"message": "Gyoka is available",
+				})
+				return
+			}
+
+			atomic.AddInt32(&attemptCount, 1)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":   "bad_request",
+				"message": "invalid input",
+			})
+		}))
+		defer server.Close()
+
+		client, err := NewGyokaEditor(server.URL, logger, WithRetryWaitTime(100*time.Microsecond))
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := client.Open(ctx); err != nil {
+			t.Fatalf("failed to open client: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+
+		err = client.Add(PostParams{
+			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
+			Did:       "did:plc:test",
+			Rkey:      "test",
+			Cid:       "test-cid",
+			IndexedAt: time.Now(),
+			Langs:     []string{"en"},
+		})
+
+		if err == nil {
+			t.Error("expected error for bad request, got nil")
+		}
+
+		finalAttempts := atomic.LoadInt32(&attemptCount)
+		if finalAttempts != 1 {
+			t.Errorf("expected 1 attempt (no retry for 400), got %d", finalAttempts)
+		}
+	})
+
+	t.Run("Open_RetryOnServerError", func(t *testing.T) {
+		var attemptCount int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attemptCount, 1)
+			if atomic.LoadInt32(&attemptCount) < 3 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "Gyoka is available",
+			})
+		}))
+		defer server.Close()
+
+		client, err := NewGyokaEditor(server.URL, logger, WithRetryWaitTime(100*time.Microsecond))
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err = client.Open(ctx)
+		if err != nil {
+			t.Errorf("expected success after retries, got error: %v", err)
+		}
+
+		finalAttempts := atomic.LoadInt32(&attemptCount)
+		if finalAttempts != 3 {
+			t.Errorf("expected 3 attempts, got %d", finalAttempts)
+		}
+	})
+}
+
+func TestBackoffCalculation(t *testing.T) {
+	baseDelay := 100 * time.Millisecond
+
+	tests := []struct {
+		attempt  int
+		expected time.Duration
+	}{
+		{0, 0},
+		{1, baseDelay},
+		{2, 2 * baseDelay},
+		{3, 4 * baseDelay},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("attempt_%d", tt.attempt), func(t *testing.T) {
+			delay := calculateBackoffDelay(tt.attempt, baseDelay)
+			if tt.attempt == 0 {
+				if delay != 0 {
+					t.Errorf("expected 0 delay for attempt 0, got %v", delay)
+				}
+				return
+			}
+
+			expectedBase := float64(tt.expected)
+			actualFloat := float64(delay)
+			jitterRange := expectedBase * 0.1
+
+			if actualFloat < expectedBase-jitterRange || actualFloat > expectedBase+jitterRange {
+				t.Errorf("delay %v not within expected range %v ± %v", delay, tt.expected, jitterRange)
+			}
+		})
+	}
+}
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		statusCode int
+		retryable  bool
+	}{
+		{200, false},
+		{400, false},
+		{401, false},
+		{403, false},
+		{404, false},
+		{408, true},
+		{429, true},
+		{500, true},
+		{502, true},
+		{503, true},
+		{504, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("status_%d", tt.statusCode), func(t *testing.T) {
+			result := isRetryableError(tt.statusCode)
+			if result != tt.retryable {
+				t.Errorf("expected %v for status %d, got %v", tt.retryable, tt.statusCode, result)
+			}
 		})
 	}
 }
