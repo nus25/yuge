@@ -51,6 +51,17 @@ func (m *MockEditor) Delete(params editor.DeleteParams) error {
 	return nil
 }
 
+func (m *MockEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
+	var remainingPosts []types.Post
+	for _, p := range m.posts {
+		if !strings.HasPrefix(string(p.Uri), "at://"+did+"/") {
+			remainingPosts = append(remainingPosts, p)
+		}
+	}
+	m.posts = remainingPosts
+	return nil
+}
+
 func (m *MockEditor) Trim(params editor.TrimParams) error {
 	count := params.Count
 	if len(m.posts) > count {

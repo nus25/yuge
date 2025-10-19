@@ -61,6 +61,12 @@ func TestFileEditor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to delete post: %v", err)
 		}
+
+		// Test DeleteByDid
+		err = editor.DeleteByDid(feed, did)
+		if err != nil {
+			t.Fatalf("failed to delete posts by did: %v", err)
+		}
 	})
 
 	t.Run("trim posts", func(t *testing.T) {

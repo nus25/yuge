@@ -41,11 +41,12 @@ func calculateBackoffDelay(attempt int, baseDelay time.Duration) time.Duration {
 }
 
 type feedRequest struct {
-	operation    string
-	AddParams    PostParams
-	DeleteParams DeleteParams
-	TrimParams   TrimParams
-	errCh        chan error
+	operation         string
+	AddParams         PostParams
+	DeleteParams      DeleteParams
+	DeleteByDidParams DeleteByDidParams
+	TrimParams        TrimParams
+	errCh             chan error
 }
 
 type GyokaEditor struct {
@@ -398,6 +399,17 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 			return err
 		}
 		return e.handleResponse(resp.StatusCode(), resp.Body)
+	case "deleteByDid":
+		params := req.DeleteByDidParams
+		body := client.PostRemovePostByAuthorJSONRequestBody{
+			Feed:   string(params.FeedUri),
+			Author: params.Did,
+		}
+		resp, err := e.client.PostRemovePostByAuthorWithResponse(ctx, body)
+		if err != nil {
+			return err
+		}
+		return e.handleResponse(resp.StatusCode(), resp.Body)
 	case "trim":
 		params := req.TrimParams
 		body := client.PostTrimFeedJSONRequestBody{
@@ -566,6 +578,26 @@ func (e *GyokaEditor) Delete(params DeleteParams) error {
 		DeleteParams: params,
 		errCh:        errCh,
 	}
+	return <-errCh
+}
+
+func (e *GyokaEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
+	if e.client == nil {
+		e.logger.Info("No feed editor url is set. DeleteByDid request is skipped.")
+		return nil
+	}
+	if err := feedUri.Validate(); err != nil {
+		e.logger.Error("invalid feed uri", "error", err)
+		return fmt.Errorf("invalid feed uri: %w", err)
+	}
+
+	errCh := make(chan error, 1)
+	e.requestCh <- &feedRequest{
+		operation:         "deleteByDid",
+		DeleteByDidParams: DeleteByDidParams{FeedUri: feedUri, Did: did},
+		errCh:             errCh,
+	}
+
 	return <-errCh
 }
 
