@@ -28,6 +28,9 @@ type PostParams struct {
 	Langs     []string
 }
 
+type BatchPostParams struct {
+	Entries []PostParams
+}
 type DeleteParams struct {
 	FeedUri types.FeedUri
 	Did     string

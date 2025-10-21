@@ -25,6 +25,8 @@ const (
 	defaultIdleConnTimeout     = 90 * time.Second
 	defaultMaxRetries          = 3
 	defaultRetryWaitTime       = 2 * time.Second
+	defaultBatchInterval       = 1 * time.Second
+	maxBatchSize               = 25
 )
 
 func isRetryableError(statusCode int) bool {
@@ -43,6 +45,7 @@ func calculateBackoffDelay(attempt int, baseDelay time.Duration) time.Duration {
 type feedRequest struct {
 	operation         string
 	AddParams         PostParams
+	BatchAddParams    BatchPostParams
 	DeleteParams      DeleteParams
 	DeleteByDidParams DeleteByDidParams
 	TrimParams        TrimParams
@@ -60,6 +63,14 @@ type GyokaEditor struct {
 	closeMu   sync.RWMutex
 	requestMu sync.RWMutex
 	closing   bool
+
+	// for batch add
+	batchPool       []PostParams
+	batchMu         sync.Mutex
+	batchTimer      *time.Timer
+	lastBatchTime   time.Time
+	batchInterval   time.Duration
+	firstAddInBatch bool
 }
 
 type customHeaderTransport struct {
@@ -191,13 +202,16 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 	}
 
 	return &GyokaEditor{
-		client:    c,
-		option:    opt,
-		logger:    logger,
-		requestCh: make(chan *feedRequest, 100),
-		done:      make(chan struct{}),
-		mu:        sync.RWMutex{},
-		requestMu: sync.RWMutex{},
+		client:          c,
+		option:          opt,
+		logger:          logger,
+		requestCh:       make(chan *feedRequest, 100),
+		done:            make(chan struct{}),
+		mu:              sync.RWMutex{},
+		requestMu:       sync.RWMutex{},
+		batchPool:       make([]PostParams, 0, 100),
+		batchInterval:   defaultBatchInterval,
+		firstAddInBatch: true,
 	}, nil
 }
 
@@ -384,6 +398,58 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 			return err
 		}
 		return e.handleResponse(resp.StatusCode(), resp.Body)
+	case "batchAdd":
+		params := req.BatchAddParams
+
+		// Group entries by feed
+		feedMap := make(map[string][]client.BatchAddPostPostParam)
+		for _, entry := range params.Entries {
+			feedUri := string(entry.FeedUri)
+			uri := "at://" + entry.Did + "/app.bsky.feed.post/" + entry.Rkey
+			var languages []string
+			if len(entry.Langs) == 0 {
+				languages = nil
+			} else {
+				languages = entry.Langs
+			}
+
+			post := client.BatchAddPostPostParam{
+				Cid:         entry.Cid,
+				FeedContext: nil, //not supported
+				IndexedAt:   &entry.IndexedAt,
+				Languages:   &languages,
+				Reason:      nil, //repost is not supported
+				Uri:         uri,
+			}
+			feedMap[feedUri] = append(feedMap[feedUri], post)
+		}
+
+		// Build entries array
+		entries := make([]struct {
+			Feed  string                         `json:"feed"`
+			Posts []client.BatchAddPostPostParam `json:"posts"`
+		}, 0, len(feedMap))
+
+		for feedUri, posts := range feedMap {
+			entries = append(entries, struct {
+				Feed  string                         `json:"feed"`
+				Posts []client.BatchAddPostPostParam `json:"posts"`
+			}{
+				Feed:  feedUri,
+				Posts: posts,
+			})
+		}
+
+		body := client.PostBatchAddPostsJSONRequestBody{
+			Entries: entries,
+		}
+
+		resp, err := e.client.PostBatchAddPostsWithResponse(ctx, body)
+		if err != nil {
+			return err
+		}
+		return e.handleResponse(resp.StatusCode(), resp.Body)
+
 	case "delete":
 		params := req.DeleteParams
 		uri := "at://" + params.Did + "/app.bsky.feed.post/" + params.Rkey
@@ -554,11 +620,126 @@ func (e *GyokaEditor) Add(params PostParams) error {
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
 
+	e.batchMu.Lock()
+
+	// 最初のAddはそのまま送信
+	if e.firstAddInBatch {
+		e.firstAddInBatch = false
+		e.lastBatchTime = time.Now()
+		e.batchMu.Unlock()
+
+		// 即座にリクエストを送信
+		errCh := make(chan error, 1)
+		e.requestCh <- &feedRequest{
+			operation: "add",
+			AddParams: params,
+			errCh:     errCh,
+		}
+
+		// タイマーを設定して次のバッチ処理を準備
+		e.batchMu.Lock()
+		if e.batchTimer != nil {
+			e.batchTimer.Stop()
+		}
+		e.batchTimer = time.AfterFunc(e.batchInterval, func() {
+			e.flushBatch()
+		})
+		e.batchMu.Unlock()
+
+		return <-errCh
+	}
+
+	// 2回目以降はプールに追加
+	e.batchPool = append(e.batchPool, params)
+
+	// タイマーがまだセットされていない場合は設定
+	if e.batchTimer == nil {
+		e.batchTimer = time.AfterFunc(e.batchInterval, func() {
+			e.flushBatch()
+		})
+	}
+
+	e.batchMu.Unlock()
+
+	// バッチ処理は非同期なので即座に返す
+	return nil
+}
+
+func (e *GyokaEditor) flushBatch() {
+	e.batchMu.Lock()
+
+	if len(e.batchPool) == 0 {
+		e.firstAddInBatch = true
+		e.batchTimer = nil
+		e.batchMu.Unlock()
+		return
+	}
+
+	// プールからエントリーを取り出す
+	allEntries := make([]PostParams, len(e.batchPool))
+	for i, p := range e.batchPool {
+		allEntries[i] = PostParams{
+			FeedUri:   p.FeedUri,
+			Did:       p.Did,
+			Rkey:      p.Rkey,
+			Cid:       p.Cid,
+			IndexedAt: p.IndexedAt,
+			Langs:     p.Langs,
+		}
+	}
+
+	// プールをクリア
+	e.batchPool = e.batchPool[:0]
+	e.firstAddInBatch = true
+	e.batchTimer = nil
+	e.lastBatchTime = time.Now()
+
+	e.batchMu.Unlock()
+
+	// 25件ごとに分割してBatchAddを実行
+	totalCount := len(allEntries)
+	for i := 0; i < totalCount; i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > totalCount {
+			end = totalCount
+		}
+		batchEntries := allEntries[i:end]
+
+		errCh := make(chan error, 1)
+		e.requestCh <- &feedRequest{
+			operation:      "batchAdd",
+			BatchAddParams: BatchPostParams{Entries: batchEntries},
+			errCh:          errCh,
+		}
+
+		// エラーをログに記録（非同期なので呼び出し元には返せない）
+		if err := <-errCh; err != nil {
+			e.logger.Error("batch add failed", "error", err, "count", len(batchEntries), "batch", i/maxBatchSize+1)
+		} else {
+			e.logger.Info("batch add succeeded", "count", len(batchEntries), "batch", i/maxBatchSize+1, "total", totalCount)
+		}
+	}
+}
+
+func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
+	if e.client == nil {
+		e.logger.Info("No feed editor url is set. BatchAdd request is skipped.")
+		return nil
+	}
+
+	// Validate all feed URIs
+	for _, entry := range params.Entries {
+		if err := entry.FeedUri.Validate(); err != nil {
+			e.logger.Error("invalid feed uri", "error", err)
+			return fmt.Errorf("invalid feed uri: %w", err)
+		}
+	}
+
 	errCh := make(chan error, 1)
 	e.requestCh <- &feedRequest{
-		operation: "add",
-		AddParams: params,
-		errCh:     errCh,
+		operation:      "batchAdd",
+		BatchAddParams: params,
+		errCh:          errCh,
 	}
 	return <-errCh
 }
@@ -633,6 +814,14 @@ func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
 
 func (e *GyokaEditor) Close(ctx context.Context) error {
 	if e.client != nil {
+		// クローズ前にバッファされたバッチをフラッシュ
+		e.batchMu.Lock()
+		if e.batchTimer != nil {
+			e.batchTimer.Stop()
+		}
+		e.batchMu.Unlock()
+		e.flushBatch()
+
 		e.closeMu.Lock()
 		if !e.closing {
 			e.closing = true
