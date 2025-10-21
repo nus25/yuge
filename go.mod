@@ -11,7 +11,7 @@ require (
 	github.com/goccy/go-yaml v1.15.22
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.17.11
-	github.com/nus25/gyoka-client/go v0.0.0-20250506102131-3a47efb17a97
+	github.com/nus25/gyoka-client/go v0.0.0-20251021134614-e5a04325fc91
 	github.com/prometheus/client_golang v1.20.5
 	github.com/urfave/cli/v2 v2.27.5
 	go.uber.org/atomic v1.11.0
@@ -67,7 +67,7 @@ require (
 	github.com/multiformats/go-multihash v0.2.3 // indirect
 	github.com/multiformats/go-varint v0.0.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/oapi-codegen/runtime v1.1.1 // indirect
+	github.com/oapi-codegen/runtime v1.1.2 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/polydawn/refmt v0.89.1-0.20221221234430-40501e09de1f // indirect
