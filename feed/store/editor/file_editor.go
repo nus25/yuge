@@ -127,6 +127,10 @@ func (e *FileEditor) Delete(params DeleteParams) error {
 	return nil
 }
 
+func (e *FileEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
+	return nil
+}
+
 func (e *FileEditor) Trim(params TrimParams) error {
 	return nil
 }

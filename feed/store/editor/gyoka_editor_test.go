@@ -623,3 +623,73 @@ func TestTrim(t *testing.T) {
 		}
 	})
 }
+
+func TestDeleteByDid(t *testing.T) {
+	t.Run("deleteByDid request", func(t *testing.T) {
+		var reqcount int
+		var receivedFeed string
+		var receivedAuthor string
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/gyoka/ping" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{
+					"message": "Gyoka is available",
+				})
+				return
+			}
+			if got := strings.TrimSuffix(r.URL.Path, "/"); got != "/api/feed/removePostByAuthor" {
+				t.Errorf("path = %s, want /api/feed/removePostByAuthor", got)
+			}
+			if r.Method != "POST" {
+				t.Errorf("expected method POST, got %s", r.Method)
+			}
+			reqcount++
+			var req struct {
+				Feed   string `json:"feed"`
+				Author string `json:"author"`
+			}
+			err := json.NewDecoder(r.Body).Decode(&req)
+			if err != nil {
+				t.Errorf("failed to decode body: %v", err)
+			}
+			receivedFeed = req.Feed
+			receivedAuthor = req.Author
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message":      "success",
+				"deletedCount": 5,
+			})
+		}))
+		defer ts.Close()
+
+		client, err := NewGyokaEditor(ts.URL, nil, nil)
+		if err != nil {
+			t.Fatalf("failed to create editor: %v", err)
+		}
+
+		feed := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
+		did := "did:plc:testauthor"
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		if err = client.Open(ctx); err != nil {
+			t.Fatalf("failed to open client: %v", err)
+		}
+
+		if err = client.DeleteByDid(feed, did); err != nil {
+			t.Errorf("failed to delete by did: %v", err)
+		}
+
+		if reqcount != 1 {
+			t.Errorf("request count = %d, want 1", reqcount)
+		}
+		if got := receivedFeed; got != string(feed) {
+			t.Errorf("received feed = %s, want %s", got, string(feed))
+		}
+		if got := receivedAuthor; got != did {
+			t.Errorf("received author = %s, want %s", got, did)
+		}
+	})
+}

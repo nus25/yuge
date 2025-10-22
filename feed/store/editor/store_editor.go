@@ -28,10 +28,18 @@ type PostParams struct {
 	Langs     []string
 }
 
+type BatchPostParams struct {
+	Entries []PostParams
+}
 type DeleteParams struct {
 	FeedUri types.FeedUri
 	Did     string
 	Rkey    string
+}
+
+type DeleteByDidParams struct {
+	FeedUri types.FeedUri
+	Did     string
 }
 
 type TrimParams struct {
@@ -50,6 +58,9 @@ type StoreEditor interface {
 
 	// Delete はフィードから投稿を削除します
 	Delete(params DeleteParams) error
+
+	// DeleteByDid は指定されたDIDの投稿をすべて削除します
+	DeleteByDid(feedUri types.FeedUri, did string) error
 
 	// Trim はフィードの投稿数を指定された数に制限します
 	Trim(params TrimParams) error

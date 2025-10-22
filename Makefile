@@ -19,6 +19,12 @@ $(PREFIX_SUBSCRIBER)run: .env
 	@echo "Running yuge subscriber..."
 	set -a && . $(PWD)/.env && set +a && $(GO_CMD) run ./cmd/yuge_subscriber/... run
 
+# Build subscriber docker image for amd64
+.PHONY: $(PREFIX_SUBSCRIBER)build-amd64
+$(PREFIX_SUBSCRIBER)build-amd64:
+	@echo "Building yuge subscriber docker image for amd64..."
+	docker buildx build --platform linux/amd64 -f build/Dockerfile.subscriber -t yuge-subscriber:$(YUGE_SUBSCRIBER_VERSION)-amd64 --load .
+
 # Run subscriber in docker
 .PHONY: $(PREFIX_SUBSCRIBER)up
 $(PREFIX_SUBSCRIBER)up:

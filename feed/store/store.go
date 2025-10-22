@@ -265,19 +265,23 @@ func (s *StoreImpl) DeleteByDid(did string) (deleted []types.Post, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	deleted = make([]types.Post, 0)
-	posts := s.listPost(did)
-
-	for _, post := range posts {
-		parts := strings.Split(string(post.Uri), "/")
-		if len(parts) < 5 {
-			continue
+	uriPrefix := fmt.Sprintf("at://%s/app.bsky.feed.post/", did)
+	var remainingPosts []types.Post
+	for _, post := range s.posts {
+		if strings.HasPrefix(string(post.Uri), uriPrefix) {
+			deleted = append(deleted, post)
+			delete(s.postIndex, post.Uri)
+		} else {
+			remainingPosts = append(remainingPosts, post)
 		}
+	}
+	s.posts = remainingPosts
 
-		if err := s.deletePost(did, parts[4]); err != nil {
-			return nil, fmt.Errorf("failed to delete post %s: %w", post.Uri, err)
+	if s.editor != nil {
+		err := s.editor.DeleteByDid(s.feedUri, did)
+		if err != nil {
+			return nil, err
 		}
-		deleted = append(deleted, post)
 	}
 
 	return deleted, nil
