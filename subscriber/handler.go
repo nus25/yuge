@@ -124,7 +124,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 					postsAdded.WithLabelValues(feedID).Inc()
 					h.logger.Info("adding post", "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey, "Langs", post.Langs)
 					if err := feed.AddPost(evt.Did, evt.Commit.RKey, evt.Commit.CID, time.Now(), post.Langs); err != nil {
-						h.logger.Error("failed to add post", "error", err, "feed", feedID)
+						h.logger.Error("failed to add post", "error", err, "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey, "Langs", post.Langs)
 						return
 					}
 				}(id, fi.Feed, evt, post)
@@ -140,7 +140,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 					postsDeleted.WithLabelValues(feedID).Inc()
 					h.logger.Info("deleting post", "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
 					if err := feed.DeletePost(evt.Did, evt.Commit.RKey); err != nil {
-						h.logger.Error("failed to delete post", "error", err, "feed", feedID)
+						h.logger.Error("failed to delete post", "error", err, "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
 						return
 					}
 				}(id, fi.Feed, evt)
