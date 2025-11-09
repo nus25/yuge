@@ -357,16 +357,16 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 
 		lastErr = err
 		if isNonRetryableError(err) {
-			e.logger.Error("request failed with non-retryable error", "operation", req.operation, "error", err)
+			e.logger.Error("request failed with non-retryable error", "operation", req.operation, "error", err, "params", req)
 			return err
 		}
 
 		if attempt < e.option.maxRetries {
-			e.logger.Warn("request failed, will retry", "operation", req.operation, "attempt", attempt, "error", err)
+			e.logger.Warn("request failed, will retry", "operation", req.operation, "attempt", attempt, "error", err, "params", req)
 		}
 	}
 
-	e.logger.Error("request failed after all retries", "operation", req.operation, "attempts", e.option.maxRetries+1, "error", lastErr)
+	e.logger.Error("request failed after all retries", "operation", req.operation, "attempts", e.option.maxRetries+1, "error", lastErr, "params", req)
 	return lastErr
 }
 
@@ -612,8 +612,8 @@ func (e *GyokaEditor) executeLoadRequest(ctx context.Context, params LoadParams)
 
 func (e *GyokaEditor) Add(params PostParams) error {
 	if e.client == nil {
-		e.logger.Info("No feed editor url is set. Add request is skipped.")
-		return nil
+		e.logger.Info("no feed editor url is set. add request is skipped.")
+		return fmt.Errorf("no feed editor url is set.add request is skipped")
 	}
 	if err := params.FeedUri.Validate(); err != nil {
 		e.logger.Error("invalid feed uri", "error", err)
@@ -735,13 +735,72 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 		}
 	}
 
-	errCh := make(chan error, 1)
-	e.requestCh <- &feedRequest{
-		operation:      "batchAdd",
-		BatchAddParams: params,
-		errCh:          errCh,
+	// maxBatchSizeを超える場合は分割して送信
+	totalCount := len(params.Entries)
+	if totalCount == 0 {
+		return nil
 	}
-	return <-errCh
+
+	e.logger.Info("processing batch add request", "total_entries", totalCount)
+
+	var firstErr error
+	successCount := 0
+	failureCount := 0
+
+	for i := 0; i < totalCount; i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > totalCount {
+			end = totalCount
+		}
+		batchEntries := params.Entries[i:end]
+		batchNum := i/maxBatchSize + 1
+		totalBatches := (totalCount + maxBatchSize - 1) / maxBatchSize
+
+		e.logger.Info("sending batch request",
+			"batch", batchNum,
+			"total_batches", totalBatches,
+			"batch_size", len(batchEntries))
+
+		errCh := make(chan error, 1)
+		e.requestCh <- &feedRequest{
+			operation:      "batchAdd",
+			BatchAddParams: BatchPostParams{Entries: batchEntries},
+			errCh:          errCh,
+		}
+
+		if err := <-errCh; err != nil {
+			failureCount += len(batchEntries)
+			e.logger.Error("batch request failed",
+				"batch", batchNum,
+				"total_batches", totalBatches,
+				"batch_size", len(batchEntries),
+				"error", err)
+			// 最初のエラーのみ保存
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			successCount += len(batchEntries)
+			e.logger.Info("batch request succeeded",
+				"batch", batchNum,
+				"total_batches", totalBatches,
+				"batch_size", len(batchEntries))
+		}
+	}
+
+	if firstErr != nil {
+		e.logger.Error("batch add completed with errors",
+			"total_entries", totalCount,
+			"success_count", successCount,
+			"failure_count", failureCount,
+			"first_error", firstErr)
+		return fmt.Errorf("batch add partially failed: %d/%d entries succeeded: %w", successCount, totalCount, firstErr)
+	}
+
+	e.logger.Info("batch add completed successfully",
+		"total_entries", totalCount,
+		"success_count", successCount)
+	return nil
 }
 
 func (e *GyokaEditor) Delete(params DeleteParams) error {
