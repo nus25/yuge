@@ -2,7 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"fmt"
 	"log"
 	"os"
 
@@ -34,11 +33,13 @@ func run(args []string) {
 						Flags: []cli.Flag{
 							&cli.StringFlag{
 								Name:    "identifier",
+								Aliases: []string{"i"},
 								Usage:   "Bluesky identifier (handle or DID)",
 								EnvVars: []string{"BLUESKY_IDENTIFIER"},
 							},
 							&cli.StringFlag{
 								Name:    "password",
+								Aliases: []string{"p"},
 								Usage:   "Bluesky password",
 								EnvVars: []string{"BLUESKY_PASSWORD"},
 							},
@@ -70,6 +71,10 @@ func run(args []string) {
 								Value: false,
 								Usage: "Whether to accept interaction feedback from viewers.",
 							},
+							&cli.PathFlag{
+								Name:  "yuge-config",
+								Usage: "path to yuge feed config YAML file",
+							},
 							&cli.StringFlag{
 								Name:   "host",
 								Value:  "https://bsky.social",
@@ -80,43 +85,90 @@ func run(args []string) {
 								Name:  "debug",
 								Usage: "Enable detailed debug logging",
 							},
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Skip confirmation prompt",
+							},
+							&cli.BoolFlag{
+								Name:  "dry-run",
+								Value: false,
+								Usage: "Perform all validations and show the " +
+									"resulting feed record without publishing it",
+							},
 						},
 						Action: yugeCli.PublishFeed,
 					},
 					{
 						Name:      "unpublish",
-						Aliases:   []string{"rm"},
 						Usage:     "Remove a feed record from your PDS",
 						ArgsUsage: "<record-key>",
-						Action: func(c *cli.Context) error {
-							if c.NArg() < 1 {
-								return fmt.Errorf("feed URL is required")
-							}
-							feedURL := c.Args().Get(0)
-							identifier := c.String("identifier")
-							password := c.String("password")
-
-							// TODO: フィード削除処理を実装
-							fmt.Printf("Identifier: %s\n", identifier)
-							fmt.Printf("Password: %s\n", password)
-							fmt.Printf("Removing feed: %s\n", feedURL)
-							return nil
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "identifier",
+								Aliases: []string{"i"},
+								Usage:   "Bluesky identifier (handle or DID)",
+								EnvVars: []string{"BLUESKY_IDENTIFIER"},
+							},
+							&cli.StringFlag{
+								Name:    "password",
+								Aliases: []string{"p"},
+								Usage:   "Bluesky password",
+								EnvVars: []string{"BLUESKY_PASSWORD"},
+							},
+							&cli.StringFlag{
+								Name:   "host",
+								Value:  "https://bsky.social",
+								Usage:  "Bluesky service host URL",
+								Hidden: true,
+							},
+							&cli.BoolFlag{
+								Name:  "debug",
+								Usage: "Enable detailed debug logging",
+							},
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Skip confirmation prompt",
+							},
 						},
+						Action: yugeCli.UnpublishFeed,
 					},
 					{
-						Name:    "list",
-						Aliases: []string{"ls"},
-						Usage:   "List all feeds",
-						Action: func(c *cli.Context) error {
-							identifier := c.String("identifier")
-							password := c.String("password")
-
-							// TODO: フィード一覧表示処理を実装
-							fmt.Printf("Identifier: %s\n", identifier)
-							fmt.Printf("Password: %s\n", password)
-							fmt.Println("Listing feeds...")
-							return nil
+						Name:      "list",
+						Aliases:   []string{"ls"},
+						Usage:     "List all feeds or specific feed records by record key",
+						ArgsUsage: "[record-key]",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "identifier",
+								Aliases: []string{"i"},
+								Usage:   "Bluesky identifier (handle or DID)",
+								EnvVars: []string{"BLUESKY_IDENTIFIER"},
+							},
+							&cli.StringFlag{
+								Name:    "password",
+								Aliases: []string{"p"},
+								Usage:   "Bluesky password",
+								EnvVars: []string{"BLUESKY_PASSWORD"},
+							},
+							&cli.StringFlag{
+								Name:   "host",
+								Value:  "https://bsky.social",
+								Usage:  "Bluesky service host URL",
+								Hidden: true,
+							},
+							&cli.BoolFlag{
+								Name:  "debug",
+								Usage: "Enable detailed debug logging",
+							},
+							&cli.BoolFlag{
+								Name:    "detailed",
+								Aliases: []string{"d"},
+								Usage:   "Show record details",
+							},
 						},
+						Action: yugeCli.ListFeeds,
 					},
 				},
 			},
