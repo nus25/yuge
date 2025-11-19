@@ -1,4 +1,5 @@
 GO_CMD = CGO_ENABLED=0 GOOS=linux go
+PREFIX_CLI = cli-
 PREFIX_SUBSCRIBER = sbsc-
 YUGE_SUBSCRIBER_VERSION=$(shell cat ./cmd/yuge_subscriber/version.txt)
 # Run tests
@@ -36,3 +37,9 @@ $(PREFIX_SUBSCRIBER)up:
 $(PREFIX_SUBSCRIBER)down:
 	@echo "Stopping yuge subscriber..."
 	docker compose -f docker-compose.subscriber.yaml down
+
+# yuge cli
+.PHONY: $(PREFIX_CLI)build
+$(PREFIX_CLI)build:
+	@echo "Building yuge CLI Go binary..."
+	$(GO_CMD) build -ldflags="-s -w" -trimpath -o bin/yuge cmd/yuge_cli/*.go
