@@ -90,6 +90,7 @@ func (w *XRPCClientWrapper) ListRecords(ctx context.Context, repo, collection st
 		"repo":       repo,
 		"collection": collection,
 		"limit":      limit,
+		"reverse":    reverse,
 	}
 	if cursor != nil {
 		params["cursor"] = *cursor
