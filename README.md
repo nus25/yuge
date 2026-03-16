@@ -95,6 +95,69 @@ go install github.com/nus25/yuge/cmd/yuge_subscriber
 ## 設定オプション
 執筆中
 
+
+## CLI
+
+自分のrepoのフィードレコードを操作するCLIツール
+
+### 1. インストール
+
+Goが入っている環境で以下のコマンドでインストール：
+
+```bash
+go install github.com/nus25/yuge/cmd/yuge_cli
+```
+
+### 2. 実行
+
+```bash
+yuge_cli
+# または
+$GOPATH/bin/yuge_cli
+```
+
+ヘルプの確認：
+
+```bash
+yuge_cli feed [command] -h
+```
+
+### 3. コマンド
+
+#### フィード追加
+
+```bash
+yuge_cli feed publish \
+  -i 自分のハンドル \
+  --service-did "did:web:ジェネレーターのDID" \
+  --display-name "フィード名" \
+  --description "説明" \
+  --avatar "data/icon.png" \
+  myrecordkey
+```
+
+#### フィード削除
+
+```bash
+yuge_cli feed unpublish -i 自分のハンドル myrecordkey
+```
+
+#### フィードリスト
+
+```bash
+yuge_cli feed list [rkey または (*,?)入りのパターン]
+```
+
+### 環境変数の設定
+
+以下のように環境変数を設定すれば、毎回のIDとアプリパスワードの入力を省略できます：
+
+```bash
+export BLUESKY_IDENTIFIER="nus.bsky.social"
+export BLUESKY_PASSWORD=アプリパスワード
+```
+
+
 ## ライセンス
 
 MIT License
