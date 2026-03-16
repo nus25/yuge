@@ -193,7 +193,7 @@ func parseFeedParams(cctx *cli.Context) (*FeedParams, error) {
 
 	return &FeedParams{
 		RecordKey:           cctx.Args().Get(0),
-		Identifier:          *parsedIdentifier,
+		Identifier:          parsedIdentifier,
 		Password:            password,
 		ServiceDID:          cctx.String("service-did"),
 		DisplayName:         cctx.String("display-name"),

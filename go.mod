@@ -3,8 +3,8 @@ module github.com/nus25/yuge
 go 1.25.0
 
 require (
-	github.com/bluesky-social/indigo v0.0.0-20250211193014-79a0357342cf
-	github.com/bluesky-social/jetstream v0.0.0-20241210005130-ea96859b93d1
+	github.com/bluesky-social/indigo v0.0.0-20260120225912-12d69fa4d209
+	github.com/bluesky-social/jetstream v0.0.0-20260226214936-e0274250f654
 	github.com/dlclark/regexp2 v1.11.5
 	github.com/gin-gonic/gin v1.12.0
 	github.com/goccy/go-json v0.10.6
@@ -20,6 +20,7 @@ require (
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
+	github.com/earthboundkid/versioninfo/v2 v2.24.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
@@ -30,7 +31,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
-	github.com/carlmjohnson/versioninfo v0.22.5 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect

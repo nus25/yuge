@@ -119,7 +119,7 @@ func TestPublishFeed_WithMockServer(t *testing.T) {
 			parsedIdentifier, _ := syntax.ParseAtIdentifier(testIdentifier)
 			params := &FeedParams{
 				RecordKey:           testRecordKey,
-				Identifier:          *parsedIdentifier,
+				Identifier:          parsedIdentifier,
 				Password:            testPassword,
 				ServiceDID:          testServiceDID,
 				DisplayName:         testDisplayName,
