@@ -3,7 +3,7 @@ module github.com/nus25/yuge
 go 1.25.0
 
 require (
-	github.com/bluesky-social/indigo v0.0.0-20260120225912-12d69fa4d209
+	github.com/bluesky-social/indigo v0.0.0-20260312173440-9cf6b7ee3c3a
 	github.com/bluesky-social/jetstream v0.0.0-20260226214936-e0274250f654
 	github.com/dlclark/regexp2 v1.11.5
 	github.com/gin-gonic/gin v1.12.0
