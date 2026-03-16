@@ -5,8 +5,6 @@ github.com/apapsch/go-jsonmerge/v2 v2.0.0/go.mod h1:lvDnEdqiQrp0O42VQGgmlKpxL1AP
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/bluesky-social/indigo v0.0.0-20260120225912-12d69fa4d209 h1:W01PGqjCexVBzIZ4FoNe4iO8OhI9XbSE7ieWL0QnMu8=
-github.com/bluesky-social/indigo v0.0.0-20260120225912-12d69fa4d209/go.mod h1:KIy0FgNQacp4uv2Z7xhNkV3qZiUSGuRky97s7Pa4v+o=
 github.com/bluesky-social/indigo v0.0.0-20260312173440-9cf6b7ee3c3a h1:BPzpJ0tPHqFeDJyEZWyyFrkZK64EDT3IJFGDRAx9a8Q=
 github.com/bluesky-social/indigo v0.0.0-20260312173440-9cf6b7ee3c3a/go.mod h1:VG/LeqLGNI3Ew7lsYixajnZGFfWPv144qbUddh+Oyag=
 github.com/bluesky-social/jetstream v0.0.0-20260226214936-e0274250f654 h1:OK76FcHhZp8ohjRB0OMWgti0oYAWFlt3KDQcIkH1pfI=
