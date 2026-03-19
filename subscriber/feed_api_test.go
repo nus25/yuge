@@ -40,7 +40,7 @@ func createFeedService(t *testing.T) (*FeedService, string, error) {
 	return fs, tempDir, err
 }
 
-func createJSONBody(t *testing.T, data map[string]interface{}) io.Reader {
+func createJSONBody(t *testing.T, data map[string]any) io.Reader {
 	t.Helper()
 	jsonData, _ := json.Marshal(data)
 	return bytes.NewBuffer(jsonData)
@@ -75,7 +75,7 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/api/feed/test-feed", nil)
 	req.Header.Set("Content-Type", "application/json")
 	// Create request body with feed data
-	req.Body = io.NopCloser(createJSONBody(t, map[string]interface{}{
+	req.Body = io.NopCloser(createJSONBody(t, map[string]any{
 		"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
 		"configFile":    "test-config.yaml",
 		"inactiveStart": false,
@@ -106,29 +106,29 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	body = recorder.Body.String()
 
 	// JSONをパースして比較（lastUpdatedフィールドを除く）
-	var actualData []map[string]interface{}
+	var actualData []map[string]any
 	if err := json.Unmarshal([]byte(body), &actualData); err != nil {
 		t.Errorf("JSONのパースに失敗: %v", err)
 	}
 
 	// lastUpdatedフィールドを無視するために削除
 	if len(actualData) > 0 && actualData[0]["status"] != nil {
-		if status, ok := actualData[0]["status"].(map[string]interface{}); ok {
+		if status, ok := actualData[0]["status"].(map[string]any); ok {
 			delete(status, "lastUpdated")
 		}
 	}
 
 	// 期待値
-	expectedData := []map[string]interface{}{
+	expectedData := []map[string]any{
 		{
 			"id": "test-feed",
-			"definition": map[string]interface{}{
+			"definition": map[string]any{
 				"id":            "test-feed",
 				"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
 				"configFile":    "test-config.yaml",
 				"inactiveStart": "false",
 			},
-			"status": map[string]interface{}{
+			"status": map[string]any{
 				"feedId":     "test-feed",
 				"lastStatus": "active",
 			},
@@ -139,7 +139,7 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	actualJSON, _ := json.Marshal(actualData)
 	//remove lastUpdated field
 	if len(actualData) > 0 && actualData[0]["status"] != nil {
-		if status, ok := actualData[0]["status"].(map[string]interface{}); ok {
+		if status, ok := actualData[0]["status"].(map[string]any); ok {
 			delete(status, "lastUpdated")
 		}
 	}
@@ -159,13 +159,13 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	body = recorder.Body.String()
 
 	// JSONをパースして比較（lastUpdatedフィールドを除く）
-	var getFeedInfoActualData map[string]interface{}
+	var getFeedInfoActualData map[string]any
 	if err := json.Unmarshal([]byte(body), &getFeedInfoActualData); err != nil {
 		t.Errorf("JSONのパースに失敗: %v", err)
 	}
 
 	// lastpdatedフィールドを無視するために削除
-	if status, ok := getFeedInfoActualData["status"].(map[string]interface{}); ok {
+	if status, ok := getFeedInfoActualData["status"].(map[string]any); ok {
 		delete(status, "lastUpdated")
 	}
 
@@ -185,11 +185,11 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	}
 
 	// Check Status
-	expectedStatus := map[string]interface{}{
+	expectedStatus := map[string]any{
 		"feedId":     "test-feed",
 		"lastStatus": "active",
 	}
-	actualStatus, ok := getFeedInfoActualData["status"].(map[string]interface{})
+	actualStatus, ok := getFeedInfoActualData["status"].(map[string]any)
 	if !ok {
 		t.Error("Status field not found or invalid type")
 	} else {
@@ -202,10 +202,10 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	}
 
 	// Check Config
-	expectedConfig := map[string]interface{}{
+	expectedConfig := map[string]any{
 		"detailedLog": true,
 	}
-	actualConfig, ok := getFeedInfoActualData["config"].(map[string]interface{})
+	actualConfig, ok := getFeedInfoActualData["config"].(map[string]any)
 	if !ok {
 		t.Error("Config field not found or invalid type")
 	} else {
@@ -217,11 +217,11 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	}
 
 	// Check Metrics
-	actualMetrics, ok := getFeedInfoActualData["metrics"].(map[string]interface{})
+	actualMetrics, ok := getFeedInfoActualData["metrics"].(map[string]any)
 	if !ok {
 		t.Error("Metrics field not found or invalid type")
 	} else {
-		expectedMetrics := []map[string]interface{}{
+		expectedMetrics := []map[string]any{
 			{
 				"description": "post count of the feed",
 				"metricName":  "feed_post_count",
@@ -243,7 +243,7 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	// レスポンスボディを取得して検証
 	body = recorder.Body.String()
 
-	var getFeedStatusActualData map[string]interface{}
+	var getFeedStatusActualData map[string]any
 	if err := json.Unmarshal([]byte(body), &getFeedStatusActualData); err != nil {
 		t.Errorf("JSONのパースに失敗: %v", err)
 	}
@@ -252,13 +252,13 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 		delete(getFeedStatusActualData, "lastUpdated")
 	}
 
-	getFeedStatusExpectedData := map[string]interface{}{
-		"status": map[string]interface{}{
+	getFeedStatusExpectedData := map[string]any{
+		"status": map[string]any{
 			"feedId":     "test-feed",
 			"lastStatus": "active",
 		},
 	}
-	if statusMap, ok := getFeedStatusActualData["status"].(map[string]interface{}); ok {
+	if statusMap, ok := getFeedStatusActualData["status"].(map[string]any); ok {
 		delete(statusMap, "lastUpdated")
 	}
 
@@ -276,7 +276,7 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	body = recorder.Body.String()
 
 	//// test update feed status
-	updateStatusBody := map[string]interface{}{
+	updateStatusBody := map[string]any{
 		"status": "inactive",
 	}
 	updateStatusJSON, _ := json.Marshal(updateStatusBody)
@@ -294,10 +294,10 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 
-	var updatedStatusData map[string]interface{}
+	var updatedStatusData map[string]any
 	json.Unmarshal(recorder.Body.Bytes(), &updatedStatusData)
 
-	statusMap, _ := updatedStatusData["status"].(map[string]interface{})
+	statusMap, _ := updatedStatusData["status"].(map[string]any)
 	if statusMap["lastStatus"] != "inactive" {
 		t.Errorf("Expected status to be 'inactive', but got '%v'", statusMap["lastStatus"])
 	}
@@ -353,7 +353,7 @@ func TestAPIHandler_GetConfig(t *testing.T) {
 	// register feed
 	req, _ := http.NewRequest("POST", "/api/feed/test-feed", nil)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(createJSONBody(t, map[string]interface{}{
+	req.Body = io.NopCloser(createJSONBody(t, map[string]any{
 		"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
 		"configFile":    "test-config.yaml",
 		"inactiveStart": false,
@@ -370,31 +370,31 @@ func TestAPIHandler_GetConfig(t *testing.T) {
 		t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
 	}
 
-	var configData map[string]interface{}
+	var configData map[string]any
 	json.Unmarshal(recorder.Body.Bytes(), &configData)
 
 	// check config data
-	logic, ok := configData["logic"].(map[string]interface{})
+	logic, ok := configData["logic"].(map[string]any)
 	if !ok {
 		t.Errorf("Expected logic configuration, but it was missing or invalid")
 	}
 
-	blocks, ok := logic["blocks"].([]interface{})
+	blocks, ok := logic["blocks"].([]any)
 	if !ok || len(blocks) == 0 {
 		t.Errorf("Expected blocks in logic configuration, but they were missing or invalid")
 	}
 
-	block := blocks[0].(map[string]interface{})
+	block := blocks[0].(map[string]any)
 	if block["type"] != "remove" {
 		t.Errorf("Expected block type 'remove', but got '%v'", block["type"])
 	}
 
-	options := block["options"].(map[string]interface{})
+	options := block["options"].(map[string]any)
 	if options["subject"] != "language" || options["language"] != "ja" || options["operator"] != "!=" {
 		t.Errorf("Block options do not match expected values: %v", options)
 	}
 
-	store, ok := configData["store"].(map[string]interface{})
+	store, ok := configData["store"].(map[string]any)
 	if !ok {
 		t.Errorf("Expected store configuration, but it was missing or invalid")
 	}
@@ -436,7 +436,7 @@ func TestAPIHandler_PostOperations(t *testing.T) {
 	// register feed
 	req, _ := http.NewRequest("POST", "/api2/feed/test-feed", nil)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(createJSONBody(t, map[string]interface{}{
+	req.Body = io.NopCloser(createJSONBody(t, map[string]any{
 		"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
 		"configFile":    "test-config.yaml",
 		"inactiveStart": false,
@@ -585,7 +585,7 @@ func TestAPIHandler_ReloadAndClearFeed(t *testing.T) {
 	// フィードを登録
 	req, _ := http.NewRequest("POST", "/api/feed/test-feed", nil)
 	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(createJSONBody(t, map[string]interface{}{
+	req.Body = io.NopCloser(createJSONBody(t, map[string]any{
 		"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
 		"configFile":    "test-config.yaml",
 		"inactiveStart": false,
@@ -601,7 +601,7 @@ func TestAPIHandler_ReloadAndClearFeed(t *testing.T) {
 	// 投稿を追加
 	testDid := "did:plc:test123"
 	testRkey := "testrkey456"
-	postData := map[string]interface{}{
+	postData := map[string]any{
 		"cid":       "reloadfeed",
 		"indexedAt": "2024-01-01T00:00:00Z",
 	}
@@ -640,7 +640,7 @@ func TestAPIHandler_ReloadAndClearFeed(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 
-	var posts []interface{}
+	var posts []any
 	json.Unmarshal(recorder.Body.Bytes(), &posts)
 	if len(posts) != 0 {
 		t.Errorf("Expected 0 posts after clear, but got %d", len(posts))

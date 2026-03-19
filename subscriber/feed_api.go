@@ -188,7 +188,7 @@ type FeedInfoResponse struct {
 	ID      string           `json:"id"`
 	URI     string           `json:"uri"`
 	Status  *FeedStatus      `json:"status"`
-	Config  interface{}      `json:"config"`
+	Config  any              `json:"config"`
 	Metrics *metrics.Metrics `json:"metrics"`
 }
 

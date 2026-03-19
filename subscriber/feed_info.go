@@ -21,7 +21,7 @@ type FeedStatus struct {
 }
 
 func (fs *FeedStatus) MarshalJSON() ([]byte, error) {
-	m := map[string]interface{}{
+	m := map[string]any{
 		"feedId":      fs.FeedID,
 		"lastUpdated": fs.LastUpdated.UTC().Format(time.RFC3339),
 		"lastStatus":  fs.LastStatus.String(),

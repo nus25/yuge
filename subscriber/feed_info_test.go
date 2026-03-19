@@ -14,7 +14,7 @@ func TestFeedStatus_MarshalJSON(t *testing.T) {
 	tests := []struct {
 		name     string
 		status   FeedStatus
-		expected map[string]interface{}
+		expected map[string]any
 	}{
 		{
 			name: "正常なステータス（エラーなし）",
@@ -24,7 +24,7 @@ func TestFeedStatus_MarshalJSON(t *testing.T) {
 				LastStatus:  FeedStatusActive,
 				Error:       "",
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"feedId":      "test-feed",
 				"lastUpdated": now.UTC().Format(time.RFC3339),
 				"lastStatus":  "active",
@@ -38,7 +38,7 @@ func TestFeedStatus_MarshalJSON(t *testing.T) {
 				LastStatus:  FeedStatusError,
 				Error:       "something went wrong",
 			},
-			expected: map[string]interface{}{
+			expected: map[string]any{
 				"feedId":      "error-feed",
 				"lastUpdated": now.UTC().Format(time.RFC3339),
 				"lastStatus":  "error",
@@ -58,7 +58,7 @@ func TestFeedStatus_MarshalJSON(t *testing.T) {
 			}
 
 			// 結果を検証
-			var result map[string]interface{}
+			var result map[string]any
 			err = json.Unmarshal(data, &result)
 			if err != nil {
 				t.Errorf("Failed to unmarshal JSON: %v", err)

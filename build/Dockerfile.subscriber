@@ -1,10 +1,10 @@
 # Stage 0: Import SSL certificates
-FROM alpine:latest as certs
+FROM alpine:latest AS certs
 
 RUN apk --update add ca-certificates
 
 # Stage 1: Build the Go binary
-FROM golang:1.24 AS builder
+FROM golang:1.25 AS builder
 
 # Create a directory for the application
 WORKDIR /app

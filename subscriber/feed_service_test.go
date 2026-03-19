@@ -3,6 +3,7 @@ package subscriber
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -389,9 +390,7 @@ func TestFeedService_DeleteFeed(t *testing.T) {
 				feeds:  make(map[string]FeedInfo),
 				logger: service.logger,
 			}
-			for k, v := range service.feeds {
-				testService.feeds[k] = v
-			}
+			maps.Copy(testService.feeds, service.feeds)
 
 			err := testService.DeleteFeed(tt.feedId)
 
