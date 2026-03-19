@@ -116,7 +116,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 				return ok, &post, err
 			}()
 			if err != nil {
-				h.logger.Error("failed to check if post should be added", "error", err, "feed", id)
+				h.logger.Error("failed to check if post should be added", "error", err, "feed", id, "did", evt.Did, "rkey", evt.Commit.RKey)
 				continue
 			}
 			if sd {
