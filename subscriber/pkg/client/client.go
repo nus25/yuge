@@ -91,6 +91,34 @@ func (c *Client) SendPing() error {
 	return nil
 }
 
+func (c *Client) SetWebsocketURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse websocket url %q: %w", rawURL, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid websocket url %q", rawURL)
+	}
+	c.config.WebsocketURL = rawURL
+	return nil
+}
+
+func (c *Client) WebsocketURL() string {
+	if c.config == nil {
+		return ""
+	}
+	return c.config.WebsocketURL
+}
+
+func (c *Client) Close() error {
+	if c.con == nil {
+		return nil
+	}
+	err := c.con.Close()
+	c.con = nil
+	return err
+}
+
 func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 	defer func() {
 		if c.con != nil {

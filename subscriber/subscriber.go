@@ -3,7 +3,6 @@ package subscriber
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -123,6 +122,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return err
 	}
 	h.Jsc = jsc
+	cursor := cctx.Int64("override-cursor")
+	jetstreamController := NewRuntimeJetstreamController(log, h, u.String(), cursor)
+	if _, err := jetstreamController.Connect(JetstreamConnectRequest{Cursor: &cursor}); err != nil {
+		log.Error("failed to start jetstream controller", "error", err)
+		return err
+	}
 
 	// Prometheusメトリクスエンドポイントの設定
 	metricsServer := &http.Server{
@@ -152,7 +157,8 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		Addr: cctx.String("api-listen-addr"),
 		Handler: func() http.Handler {
 			r := gin.Default()
-			api := NewFeedApiHandler(fs)
+			feedAPI := NewFeedApiHandler(fs)
+			jetstreamAPI := NewJetstreamApiHandler(jetstreamController)
 			r.GET("", func(c *gin.Context) {
 				c.String(200, fmt.Sprintf("hello yuge feed subscriber\njetstream-url: %s", u.String()))
 			})
@@ -160,23 +166,26 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 				content, _ := webContent.ReadFile("webcontent/index.html")
 				c.Data(200, "text/html", content)
 			})
-			r.GET("/api/feed", api.ListFeed)
-			r.PUT("/api/feed/:feedid", api.RegisterFeed) // POSTからPUTに変更
-			r.Group("/api/feed/:feedid").Use(api.ValidateFeedId()).
-				GET("", api.GetFeedInfo).
-				DELETE("", api.UnregisterFeed).
-				GET("/status", api.GetFeedStatus).
-				PATCH("/status", api.UpdateFeedStatus).
-				POST("/clear", api.ClearFeed).
-				POST("/reload", api.ReloadFeed).
-				GET("/config", api.GetConfig).
-				GET("/post", api.GetAllPosts).
-				GET("/post/:did", api.GetPostsByDid).
-				GET("/post/:did/:rkey", api.GetPostByRkey).
-				POST("/post/:did/:rkey", api.AddPost).
-				DELETE("/post/:did", api.DeletePostByDid).
-				DELETE("/post/:did/:rkey", api.DeletePost).
-				POST("/logicblock/:logicblockname/:command", api.ProcessLogicBlockCommand)
+			r.POST("/api/jetstream/connect", jetstreamAPI.Connect)
+			r.POST("/api/jetstream/disconnect", jetstreamAPI.Disconnect)
+			r.GET("/api/jetstream/status", jetstreamAPI.Status)
+			r.GET("/api/feed", feedAPI.ListFeed)
+			r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed) // POSTからPUTに変更
+			r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).
+				GET("", feedAPI.GetFeedInfo).
+				DELETE("", feedAPI.UnregisterFeed).
+				GET("/status", feedAPI.GetFeedStatus).
+				PATCH("/status", feedAPI.UpdateFeedStatus).
+				POST("/clear", feedAPI.ClearFeed).
+				POST("/reload", feedAPI.ReloadFeed).
+				GET("/config", feedAPI.GetConfig).
+				GET("/post", feedAPI.GetAllPosts).
+				GET("/post/:did", feedAPI.GetPostsByDid).
+				GET("/post/:did/:rkey", feedAPI.GetPostByRkey).
+				POST("/post/:did/:rkey", feedAPI.AddPost).
+				DELETE("/post/:did", feedAPI.DeletePostByDid).
+				DELETE("/post/:did/:rkey", feedAPI.DeletePost).
+				POST("/logicblock/:logicblockname/:command", feedAPI.ProcessLogicBlockCommand)
 
 			return r
 		}(),
@@ -192,46 +201,6 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	log.Info("starting jetstream subscriber service")
 	// when critical error occured, close this.
 	eventsKill := make(chan struct{})
-
-	//jetstream client
-	shutdownJsc := make(chan struct{})
-	jscShutdown := make(chan struct{})
-	cursor := cctx.Int64("override-cursor")
-	go func() {
-		ctx := context.Background()
-		ctx, cancel := context.WithCancel(ctx)
-		l := log.With("source", "jetstream client")
-		go func() {
-			for {
-				//run jetstream client
-				lastCursor, err := h.HandleJetstream(ctx, log, cursor)
-				cursor = lastCursor
-				if err != nil {
-					if !errors.Is(err, context.Canceled) {
-						jetstreamErrorCount.Inc()
-						l.Error("jetstream client returned unexpectedly, retrying in 5 seconds", "error", err)
-						select {
-						case <-ctx.Done():
-							l.Info("jetstream client closed on context cancel")
-							close(jscShutdown)
-							return
-						case <-time.After(5 * time.Second):
-							continue //再接続
-						}
-					} else {
-						l.Info("jetstream client closed on context cancel")
-						close(jscShutdown)
-						return
-					}
-				}
-				close(jscShutdown)
-				return
-			}
-		}()
-		<-shutdownJsc
-		cancel()
-		l.Info("jetstream client shut down")
-	}()
 
 	// feed
 	shutdownFeed := make(chan struct{})
@@ -264,19 +233,24 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	}
 
 	log.Info("shutting down, waiting for workers to clean up...")
-	close(shutdownJsc)
-	shutdownTimeout := time.After(10 * time.Second)
+	jscShutdown := make(chan struct{})
+	go func() {
+		defer close(jscShutdown)
+		if _, err := jetstreamController.Disconnect(); err != nil {
+			log.Error("jetstream client shutdown error", "error", err)
+		}
+	}()
 	select {
 	case <-jscShutdown:
 		log.Info("jetstream client shutdown completed")
-	case <-shutdownTimeout:
+	case <-time.After(10 * time.Second):
 		log.Warn("shutdown timeout at jetstream client")
 	}
 	close(shutdownFeed)
 	select {
 	case <-feedShutdown:
 		log.Info("store shutdown completed")
-	case <-shutdownTimeout:
+	case <-time.After(10 * time.Second):
 		log.Warn("shutdown timeout at Store")
 	}
 
