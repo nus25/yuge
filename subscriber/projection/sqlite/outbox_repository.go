@@ -226,3 +226,67 @@ func (r *OutboxRepository) MarkDead(ctx context.Context, params projectionrepo.M
 	}
 	return nil
 }
+
+func (r *OutboxRepository) Requeue(ctx context.Context, params projectionrepo.RequeueParams) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE projection_outbox
+		SET status = 'pending', next_retry_at = NULL, last_error = '', updated_at = ?, completed_at = NULL
+		WHERE id = ? AND (
+			status = 'dead' OR (status = 'pending' AND COALESCE(last_error, '') <> '')
+		);
+	`, now, params.ID)
+	if err != nil {
+		return fmt.Errorf("requeue outbox entry: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read requeue rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("requeue outbox entry: no retryable row for id %d", params.ID)
+	}
+	return nil
+}
+
+func (r *OutboxRepository) Delete(ctx context.Context, params projectionrepo.DeleteParams) error {
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM projection_outbox
+		WHERE id = ? AND status <> 'processing';
+	`, params.ID)
+	if err != nil {
+		return fmt.Errorf("delete outbox entry: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read delete rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("delete outbox entry: no deletable row for id %d", params.ID)
+	}
+	return nil
+}
+
+func (r *OutboxRepository) PurgeCompleted(ctx context.Context, params projectionrepo.PurgeCompletedParams) (int64, error) {
+	if params.Limit <= 0 {
+		return 0, fmt.Errorf("purge completed outbox entries: limit must be positive")
+	}
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM projection_outbox
+		WHERE id IN (
+			SELECT id
+			FROM projection_outbox
+			WHERE target = ? AND status = 'completed'
+			ORDER BY id ASC
+			LIMIT ?
+		);
+	`, params.Target, params.Limit)
+	if err != nil {
+		return 0, fmt.Errorf("purge completed outbox entries: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read purge rows affected: %w", err)
+	}
+	return rowsAffected, nil
+}

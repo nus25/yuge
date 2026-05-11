@@ -45,6 +45,18 @@ func (r *failingOutboxRepository) MarkDead(ctx context.Context, params projectio
 	return nil
 }
 
+func (r *failingOutboxRepository) Requeue(ctx context.Context, params projectionrepo.RequeueParams) error {
+	return nil
+}
+
+func (r *failingOutboxRepository) Delete(ctx context.Context, params projectionrepo.DeleteParams) error {
+	return nil
+}
+
+func (r *failingOutboxRepository) PurgeCompleted(ctx context.Context, params projectionrepo.PurgeCompletedParams) (int64, error) {
+	return 0, nil
+}
+
 func openMutationTestDB(t *testing.T) context.Context {
 	t.Helper()
 	return context.Background()

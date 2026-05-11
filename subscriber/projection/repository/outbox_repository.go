@@ -61,6 +61,19 @@ type MarkDeadParams struct {
 	LastError string
 }
 
+type RequeueParams struct {
+	ID int64
+}
+
+type DeleteParams struct {
+	ID int64
+}
+
+type PurgeCompletedParams struct {
+	Target string
+	Limit  int
+}
+
 type OutboxRepository interface {
 	Enqueue(ctx context.Context, params EnqueueParams) error
 	ListByStatus(ctx context.Context, params ListByStatusParams) ([]Entry, error)
@@ -68,4 +81,7 @@ type OutboxRepository interface {
 	MarkCompleted(ctx context.Context, params MarkCompletedParams) error
 	MarkRetryableFailure(ctx context.Context, params MarkRetryableFailureParams) error
 	MarkDead(ctx context.Context, params MarkDeadParams) error
+	Requeue(ctx context.Context, params RequeueParams) error
+	Delete(ctx context.Context, params DeleteParams) error
+	PurgeCompleted(ctx context.Context, params PurgeCompletedParams) (int64, error)
 }

@@ -18,6 +18,7 @@ import (
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
 	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
+	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 )
@@ -172,6 +173,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			r := gin.Default()
 			feedAPI := NewFeedApiHandler(fs)
 			feedAPI.MutationCoordinator = sqlitePersistence.mutationCoordinator
+			feedAPI.ProjectionOutbox = projectionsqlite.NewOutboxRepository(sqlitePersistence.loaderDB)
 			jetstreamAPI := NewJetstreamApiHandler(jetstreamController)
 			r.GET("", func(c *gin.Context) {
 				c.String(200, fmt.Sprintf("hello yuge feed subscriber\njetstream-url: %s", u.String()))
@@ -183,6 +185,10 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			r.POST("/api/jetstream/connect", jetstreamAPI.Connect)
 			r.POST("/api/jetstream/disconnect", jetstreamAPI.Disconnect)
 			r.GET("/api/jetstream/status", jetstreamAPI.Status)
+			r.GET("/api/admin/projection/ops", feedAPI.ListProjectionOps)
+			r.POST("/api/admin/projection/ops/:id/retry", feedAPI.RetryProjectionOp)
+			r.DELETE("/api/admin/projection/ops/:id", feedAPI.DeleteProjectionOp)
+			r.POST("/api/admin/projection/ops/purge-completed", feedAPI.PurgeCompletedProjectionOps)
 			r.GET("/api/feed", feedAPI.ListFeed)
 			r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed) // POSTからPUTに変更
 			r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).

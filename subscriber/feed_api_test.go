@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/nus25/yuge/feed/store/editor"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	storesqlite "github.com/nus25/yuge/feed/store/sqlite"
+	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
+	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/nus25/yuge/types"
 )
 
@@ -320,6 +323,426 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	if exists {
 		t.Errorf("Expected feed to be deleted, but it exists")
 	}
+}
+
+func TestFeedAPI_ListProjectionOps_ReturnsFailedEntries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-failed",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/failed",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-failed",
+		SubjectKey:  "feed-failed:post-1",
+		OpKey:       "m-failed:add:post-1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() failed entry error = %v", err)
+	}
+	claimedFailed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() failed entry error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() failed entry ok = false, want true")
+	}
+	if err := repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
+		ID:          claimedFailed.ID,
+		LastError:   "temporary failure",
+		NextRetryAt: time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("MarkRetryableFailure() error = %v", err)
+	}
+
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-dead",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/dead",
+		Target:      "gyoka",
+		Operation:   "delete",
+		MutationID:  "m-dead",
+		SubjectKey:  "feed-dead:post-2",
+		OpKey:       "m-dead:delete:post-2",
+		PayloadJSON: `{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() dead entry error = %v", err)
+	}
+	claimedDead, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() dead entry error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() dead entry ok = false, want true")
+	}
+	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: claimedDead.ID, LastError: "unsupported operation"}); err != nil {
+		t.Fatalf("MarkDead() error = %v", err)
+	}
+
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-completed",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/completed",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-completed",
+		SubjectKey:  "feed-completed:post-3",
+		OpKey:       "m-completed:add:post-3",
+		PayloadJSON: `{"uri":"at://did:plc:user3/app.bsky.feed.post/post3"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() completed entry error = %v", err)
+	}
+	claimedCompleted, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() completed entry error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() completed entry ok = false, want true")
+	}
+	if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: claimedCompleted.ID}); err != nil {
+		t.Fatalf("MarkCompleted() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.Default()
+	router.GET("/api/admin/projection/ops", api.ListProjectionOps)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops?status=failed&target=gyoka&limit=10", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(response.Entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(response.Entries))
+	}
+	if got := response.Entries[0]["status"]; got != "failed" {
+		t.Fatalf("entries[0].status = %v, want failed", got)
+	}
+	if got := response.Entries[0]["feedId"]; got != "feed-failed" {
+		t.Fatalf("entries[0].feedId = %v, want feed-failed", got)
+	}
+	if got := response.Entries[0]["lastError"]; got != "temporary failure" {
+		t.Fatalf("entries[0].lastError = %v, want temporary failure", got)
+	}
+}
+
+func TestFeedAPI_RetryProjectionOp_RequeuesDeadEntry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api-retry.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-dead",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/dead",
+		Target:      "gyoka",
+		Operation:   "delete",
+		MutationID:  "m-dead",
+		SubjectKey:  "feed-dead:post-2",
+		OpKey:       "m-dead:delete:post-2",
+		PayloadJSON: `{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: claimed.ID, LastError: "unsupported operation"}); err != nil {
+		t.Fatalf("MarkDead() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.Default()
+	router.POST("/api/admin/projection/ops/:id/retry", api.RetryProjectionOp)
+
+	req, _ := http.NewRequest("POST", "/api/admin/projection/ops/"+strconv.FormatInt(claimed.ID, 10)+"/retry", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	entries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("pending entries len = %d, want 1", len(entries))
+	}
+	if entries[0].LastError != "" {
+		t.Fatalf("pending LastError = %q, want empty", entries[0].LastError)
+	}
+	if entries[0].NextRetryAt != "" {
+		t.Fatalf("pending NextRetryAt = %q, want empty", entries[0].NextRetryAt)
+	}
+}
+
+func TestFeedAPI_DeleteProjectionOp_RemovesDeadEntry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api-delete.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-dead",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/dead",
+		Target:      "gyoka",
+		Operation:   "delete",
+		MutationID:  "m-dead",
+		SubjectKey:  "feed-dead:post-2",
+		OpKey:       "m-dead:delete:post-2",
+		PayloadJSON: `{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: claimed.ID, LastError: "unsupported operation"}); err != nil {
+		t.Fatalf("MarkDead() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.Default()
+	router.DELETE("/api/admin/projection/ops/:id", api.DeleteProjectionOp)
+
+	req, _ := http.NewRequest("DELETE", "/api/admin/projection/ops/"+strconv.FormatInt(claimed.ID, 10), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	entries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "dead", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dead entries len = %d, want 0", len(entries))
+	}
+}
+
+func TestFeedAPI_PurgeCompletedProjectionOps_RemovesLimitedRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api-purge.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	for index := 0; index < 3; index++ {
+		if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+			FeedID:      "feed-completed",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/completed",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-completed-" + strconv.Itoa(index),
+			SubjectKey:  "feed-completed:post-" + strconv.Itoa(index),
+			OpKey:       "m-completed:add:post-" + strconv.Itoa(index),
+			PayloadJSON: `{"uri":"at://did:plc:user3/app.bsky.feed.post/post3"}`,
+			Status:      "pending",
+		}); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+		claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+		if err != nil {
+			t.Fatalf("ClaimNextPending() error = %v", err)
+		}
+		if !ok {
+			t.Fatal("ClaimNextPending() ok = false, want true")
+		}
+		if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: claimed.ID}); err != nil {
+			t.Fatalf("MarkCompleted() error = %v", err)
+		}
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.Default()
+	router.POST("/api/admin/projection/ops/purge-completed", api.PurgeCompletedProjectionOps)
+
+	reqBody := createJSONBody(t, map[string]any{"target": "gyoka", "limit": 2})
+	req, _ := http.NewRequest("POST", "/api/admin/projection/ops/purge-completed", reqBody)
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	entries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("completed entries len = %d, want 1", len(entries))
+	}
+}
+
+func TestFeedAPI_ListProjectionOps_RejectsInvalidStatusQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = noopOutboxRepository{}
+	router := gin.Default()
+	router.GET("/api/admin/projection/ops", api.ListProjectionOps)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops?status=invalid", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestFeedAPI_RetryProjectionOp_RejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = noopOutboxRepository{}
+	router := gin.Default()
+	router.POST("/api/admin/projection/ops/:id/retry", api.RetryProjectionOp)
+
+	req, _ := http.NewRequest("POST", "/api/admin/projection/ops/not-a-number/retry", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestFeedAPI_PurgeCompletedProjectionOps_RejectsMalformedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = noopOutboxRepository{}
+	router := gin.Default()
+	router.POST("/api/admin/projection/ops/purge-completed", api.PurgeCompletedProjectionOps)
+
+	req, _ := http.NewRequest("POST", "/api/admin/projection/ops/purge-completed", bytes.NewBufferString("{"))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+type noopOutboxRepository struct{}
+
+func (noopOutboxRepository) Enqueue(ctx context.Context, params projectionrepo.EnqueueParams) error {
+	return errors.New("unexpected Enqueue call")
+}
+
+func (noopOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
+	return nil, errors.New("unexpected ListByStatus call")
+}
+
+func (noopOutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
+	return projectionrepo.Entry{}, false, errors.New("unexpected ClaimNextPending call")
+}
+
+func (noopOutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
+	return errors.New("unexpected MarkCompleted call")
+}
+
+func (noopOutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
+	return errors.New("unexpected MarkRetryableFailure call")
+}
+
+func (noopOutboxRepository) MarkDead(ctx context.Context, params projectionrepo.MarkDeadParams) error {
+	return errors.New("unexpected MarkDead call")
+}
+
+func (noopOutboxRepository) Requeue(ctx context.Context, params projectionrepo.RequeueParams) error {
+	return errors.New("unexpected Requeue call")
+}
+
+func (noopOutboxRepository) Delete(ctx context.Context, params projectionrepo.DeleteParams) error {
+	return errors.New("unexpected Delete call")
+}
+
+func (noopOutboxRepository) PurgeCompleted(ctx context.Context, params projectionrepo.PurgeCompletedParams) (int64, error) {
+	return 0, errors.New("unexpected PurgeCompleted call")
 }
 
 var testConfig = `logic:

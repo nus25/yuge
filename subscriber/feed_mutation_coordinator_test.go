@@ -105,6 +105,18 @@ func (r *fakeOutboxRepository) MarkDead(ctx context.Context, params projectionre
 	return nil
 }
 
+func (r *fakeOutboxRepository) Requeue(ctx context.Context, params projectionrepo.RequeueParams) error {
+	return nil
+}
+
+func (r *fakeOutboxRepository) Delete(ctx context.Context, params projectionrepo.DeleteParams) error {
+	return nil
+}
+
+func (r *fakeOutboxRepository) PurgeCompleted(ctx context.Context, params projectionrepo.PurgeCompletedParams) (int64, error) {
+	return 0, nil
+}
+
 func TestFeedMutationCoordinator_AddPost_RollsBackWhenOutboxEnqueueFails(t *testing.T) {
 	t.Parallel()
 

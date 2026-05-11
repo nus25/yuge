@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nus25/yuge/feed"
 	"github.com/nus25/yuge/feed/metrics"
+	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	"github.com/nus25/yuge/types"
 )
 
@@ -20,6 +22,7 @@ import (
 type FeedApiHandler struct {
 	feedService         *FeedService
 	MutationCoordinator PostMutationCoordinator
+	ProjectionOutbox    projectionrepo.OutboxRepository
 }
 
 // NewAPIHandler はフィードを操作するAPIハンドラーを作成します
@@ -316,6 +319,189 @@ func (h *FeedApiHandler) ClearFeed(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{
 		"message": "Clear feed completed.",
+	})
+}
+
+type projectionOpResponse struct {
+	ID          int64  `json:"id"`
+	FeedID      string `json:"feedId"`
+	FeedURI     string `json:"feedUri"`
+	Target      string `json:"target"`
+	Operation   string `json:"operation"`
+	MutationID  string `json:"mutationId"`
+	SubjectKey  string `json:"subjectKey"`
+	OpKey       string `json:"opKey"`
+	Status      string `json:"status"`
+	RetryCount  int    `json:"retryCount"`
+	NextRetryAt string `json:"nextRetryAt,omitempty"`
+	LastError   string `json:"lastError,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	CompletedAt string `json:"completedAt,omitempty"`
+}
+
+func normalizeProjectionStatus(entry projectionrepo.Entry) string {
+	if entry.Status == "pending" && entry.LastError != "" {
+		return "failed"
+	}
+	return entry.Status
+}
+
+func projectionResponseFromEntry(entry projectionrepo.Entry) projectionOpResponse {
+	return projectionOpResponse{
+		ID:          entry.ID,
+		FeedID:      entry.FeedID,
+		FeedURI:     entry.FeedURI,
+		Target:      entry.Target,
+		Operation:   entry.Operation,
+		MutationID:  entry.MutationID,
+		SubjectKey:  entry.SubjectKey,
+		OpKey:       entry.OpKey,
+		Status:      normalizeProjectionStatus(entry),
+		RetryCount:  entry.RetryCount,
+		NextRetryAt: entry.NextRetryAt,
+		LastError:   entry.LastError,
+		CreatedAt:   entry.CreatedAt,
+		UpdatedAt:   entry.UpdatedAt,
+		CompletedAt: entry.CompletedAt,
+	}
+}
+
+func parseProjectionOpID(c *gin.Context) (int64, bool) {
+	entryID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || entryID <= 0 {
+		respondWithError(c, http.StatusBadRequest, "invalid projection op id", err)
+		return 0, false
+	}
+	return entryID, true
+}
+
+func (h *FeedApiHandler) ListProjectionOps(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+
+	target := c.DefaultQuery("target", "gyoka")
+	status := c.DefaultQuery("status", "failed")
+	if status != "failed" && status != "pending" && status != "processing" && status != "dead" && status != "completed" {
+		respondWithError(c, http.StatusBadRequest, "invalid status query", nil)
+		return
+	}
+	limit := 100
+	if rawLimit := c.Query("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit <= 0 {
+			respondWithError(c, http.StatusBadRequest, "invalid limit query", err)
+			return
+		}
+		if parsedLimit > 1000 {
+			parsedLimit = 1000
+		}
+		limit = parsedLimit
+	}
+
+	queryStatus := status
+	if status == "failed" {
+		queryStatus = "pending"
+	}
+	entries, err := h.ProjectionOutbox.ListByStatus(c.Request.Context(), projectionrepo.ListByStatusParams{
+		Target: target,
+		Status: queryStatus,
+		Limit:  limit,
+	})
+	if err != nil {
+		respondWithError(c, http.StatusInternalServerError, "failed to list projection ops", err)
+		return
+	}
+
+	responseEntries := make([]projectionOpResponse, 0, len(entries))
+	for _, entry := range entries {
+		if status == "failed" && entry.LastError == "" {
+			continue
+		}
+		responseEntries = append(responseEntries, projectionResponseFromEntry(entry))
+		if len(responseEntries) == limit {
+			break
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"entries": responseEntries,
+	})
+}
+
+func (h *FeedApiHandler) RetryProjectionOp(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+	entryID, ok := parseProjectionOpID(c)
+	if !ok {
+		return
+	}
+	if err := h.ProjectionOutbox.Requeue(c.Request.Context(), projectionrepo.RequeueParams{ID: entryID}); err != nil {
+		respondWithError(c, http.StatusBadRequest, "failed to retry projection op", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":      entryID,
+		"message": "projection op requeued",
+	})
+}
+
+func (h *FeedApiHandler) DeleteProjectionOp(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+	entryID, ok := parseProjectionOpID(c)
+	if !ok {
+		return
+	}
+	if err := h.ProjectionOutbox.Delete(c.Request.Context(), projectionrepo.DeleteParams{ID: entryID}); err != nil {
+		respondWithError(c, http.StatusBadRequest, "failed to delete projection op", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":      entryID,
+		"message": "projection op deleted",
+	})
+}
+
+func (h *FeedApiHandler) PurgeCompletedProjectionOps(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+	var req struct {
+		Target string `json:"target"`
+		Limit  int    `json:"limit"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondWithError(c, http.StatusBadRequest, "invalid request body", err)
+		return
+	}
+	if req.Target == "" {
+		req.Target = "gyoka"
+	}
+	if req.Limit <= 0 {
+		req.Limit = 100
+	}
+	if req.Limit > 1000 {
+		req.Limit = 1000
+	}
+	deletedCount, err := h.ProjectionOutbox.PurgeCompleted(c.Request.Context(), projectionrepo.PurgeCompletedParams{
+		Target: req.Target,
+		Limit:  req.Limit,
+	})
+	if err != nil {
+		respondWithError(c, http.StatusBadRequest, "failed to purge completed projection ops", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"deletedCount": deletedCount,
+		"message":      "completed projection ops purged",
 	})
 }
 
