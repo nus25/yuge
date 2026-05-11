@@ -6,17 +6,20 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/gin-gonic/gin"
+	"github.com/nus25/yuge/feed"
 	"github.com/nus25/yuge/feed/metrics"
 	"github.com/nus25/yuge/types"
 )
 
 // APIハンドラー
 type FeedApiHandler struct {
-	feedService *FeedService
+	feedService         *FeedService
+	MutationCoordinator PostMutationCoordinator
 }
 
 // NewAPIHandler はフィードを操作するAPIハンドラーを作成します
@@ -307,7 +310,7 @@ func (h *FeedApiHandler) ClearFeed(c *gin.Context) {
 		})
 		return
 	}
-	if err := fi.Feed.Clear(); err != nil {
+	if err := h.feedService.ClearFeed(context.Background(), feedId); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -457,7 +460,7 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 		t = time.Now()
 	}
 
-	if err := fi.Feed.AddPost(did, rkey, req.CID, t, req.Langs); err != nil {
+	if err := h.addAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, req.CID, t, req.Langs); err != nil {
 		c.JSON(500, gin.H{"error": "failed to add post"})
 		return
 	}
@@ -495,11 +498,20 @@ func (h *FeedApiHandler) DeletePostByDid(c *gin.Context) {
 		return
 	}
 
-	// 指定したdidのポストを全て削除する
-	deleted, err := fi.Feed.DeletePostByDid(did)
-	if err != nil {
-		c.JSON(500, gin.H{"error": "failed to delete posts"})
-		return
+	posts := fi.Feed.ListPost(did)
+	deleted := make([]types.Post, 0, len(posts))
+	for _, post := range posts {
+		prefix := "at://" + did + "/app.bsky.feed.post/"
+		rkey := strings.TrimPrefix(string(post.Uri), prefix)
+		if rkey == string(post.Uri) {
+			c.JSON(500, gin.H{"error": "failed to delete posts"})
+			return
+		}
+		if err := h.deleteAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, post); err != nil {
+			c.JSON(500, gin.H{"error": "failed to delete posts"})
+			return
+		}
+		deleted = append(deleted, post)
 	}
 
 	c.JSON(200, DeletePostByDidResponse{
@@ -544,13 +556,71 @@ func (h *FeedApiHandler) DeletePost(c *gin.Context) {
 		return
 	}
 
-	// ストアから削除
-	fi.Feed.DeletePost(did, rkey)
+	if err := h.deleteAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, post); err != nil {
+		c.JSON(500, gin.H{"error": "failed to delete post"})
+		return
+	}
 
 	c.JSON(200, DeletePostByRkeyResponse{
 		Message: "post deleted successfully",
 		Deleted: post,
 	})
+}
+
+func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, cid string, indexedAt time.Time, langs []string) error {
+	run := func() error {
+		trimAt := 0
+		trimRemain := 0
+		if cfg := targetFeed.Config(); cfg != nil && cfg.Store() != nil {
+			trimAt = cfg.Store().GetTrimAt()
+			trimRemain = cfg.Store().GetTrimRemain()
+		}
+		if h.MutationCoordinator != nil {
+			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
+				FeedID:    feedID,
+				FeedURI:   types.FeedUri(targetFeed.FeedUri()),
+				Did:       did,
+				Rkey:      rkey,
+				Cid:       cid,
+				IndexedAt: indexedAt,
+				Langs:     langs,
+				TrimAt:    trimAt,
+				TrimRemain: trimRemain,
+			}); err != nil {
+				return fmt.Errorf("persist accepted post: %w", err)
+			}
+		}
+		if err := targetFeed.AddPost(did, rkey, cid, indexedAt, langs); err != nil {
+			return fmt.Errorf("update feed cache: %w", err)
+		}
+		return nil
+	}
+	if h.feedService != nil {
+		return h.feedService.withFeedOperationLock(feedID, run)
+	}
+	return run()
+}
+
+func (h *FeedApiHandler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, post types.Post) error {
+	run := func() error {
+		if h.MutationCoordinator != nil {
+			if err := h.MutationCoordinator.DeletePost(ctx, DeletePostParams{
+				FeedID:  feedID,
+				FeedURI: types.FeedUri(targetFeed.FeedUri()),
+				Post:    post,
+			}); err != nil {
+				return fmt.Errorf("persist accepted delete: %w", err)
+			}
+		}
+		if err := targetFeed.DeletePost(did, rkey); err != nil {
+			return fmt.Errorf("update feed cache after delete: %w", err)
+		}
+		return nil
+	}
+	if h.feedService != nil {
+		return h.feedService.withFeedOperationLock(feedID, run)
+	}
+	return run()
 }
 
 type ProcessLogicBlockCommandRequest struct {

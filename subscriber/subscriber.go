@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nus25/yuge/feed/store/editor"
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
 	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
@@ -56,31 +55,8 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse jetstream-url: %w", err)
 	}
 
-	//// setup store editor
-	var se editor.StoreEditor
-	//Gyoka Editor
 	if cctx.String("feed-editor-endpoint") != "" {
-		logger.Info("feed editor config", "endpoint", cctx.String("feed-editor-endpoint"))
-		var opts []editor.ClientOptionFunc
-		if cctx.String("feed-editor-cf-id") != "" {
-			opts = append(opts, editor.WithCfToken(cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret")))
-		}
-		if cctx.String("gyoka-api-key") != "" {
-			opts = append(opts, editor.WithApiKey(cctx.String("gyoka-api-key")))
-		}
-		se, err = editor.NewGyokaEditor(cctx.String("feed-editor-endpoint"), logger, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to create gyoka editor: %w", err)
-		}
-	} else {
-		logger.Info("feed editor endpoint is not set. run local mode.")
-	}
-	// if no feed editor endpoint, use file editor
-	if se == nil {
-		se, err = editor.NewFileEditor(cctx.String("data-directory-path"), logger)
-		if err != nil {
-			return fmt.Errorf("failed to create file editor: %w", err)
-		}
+		logger.Info("feed editor endpoint is ignored in sqlite authoritative mode", "endpoint", cctx.String("feed-editor-endpoint"))
 	}
 
 	// setup feed service
@@ -95,10 +71,21 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		}
 	}
 	logger.Info("creating feed service", "config-directory-path", cctx.String("config-directory-path"), "data-directory-path", cctx.String("data-directory-path"))
-	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, se, logger)
+	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, nil, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}
+	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
+	if err != nil {
+		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)
+	}
+	fs.SetStoreLoader(sqlitePersistence.postLoader)
+	fs.SetMutationCoordinator(sqlitePersistence.mutationCoordinator)
+	defer func() {
+		if err := sqlitePersistence.Close(); err != nil {
+			logger.Error("failed to close sqlite runtime persistence", "error", err)
+		}
+	}()
 	logger.Info("loading feeds")
 	if err := fs.LoadFeeds(context.Background()); err != nil {
 		logger.Error("failed to load some feed", "error", err)
@@ -107,6 +94,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 
 	// handler
 	h := NewHandler(logger, fs)
+	h.MutationCoordinator = sqlitePersistence.mutationCoordinator
 
 	// setup jetstream client
 	config := jetstreamClient.DefaultClientConfig()
@@ -158,6 +146,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		Handler: func() http.Handler {
 			r := gin.Default()
 			feedAPI := NewFeedApiHandler(fs)
+			feedAPI.MutationCoordinator = sqlitePersistence.mutationCoordinator
 			jetstreamAPI := NewJetstreamApiHandler(jetstreamController)
 			r.GET("", func(c *gin.Context) {
 				c.String(200, fmt.Sprintf("hello yuge feed subscriber\njetstream-url: %s", u.String()))

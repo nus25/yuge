@@ -54,12 +54,23 @@ type Store interface {
 	Shutdown(ctx context.Context) error
 }
 
+type LoadPostsParams struct {
+	FeedID  string
+	FeedURI types.FeedUri
+	Limit   int
+}
+
+type PostLoader interface {
+	LoadPosts(ctx context.Context, params LoadPostsParams) ([]types.Post, error)
+}
+
 // StoreImpl is basic implementation for managing feed posts
 type StoreImpl struct {
 	feedId    string
 	feedUri   types.FeedUri
 	posts     []types.Post
 	postIndex map[types.PostUri]struct{} // Index for faster searching
+	loader    PostLoader
 	editor    editor.StoreEditor
 	mu        sync.RWMutex
 	config    cfgTypes.StoreConfig
@@ -70,6 +81,7 @@ type StoreOptions struct {
 	FeedId  string
 	FeedUri types.FeedUri
 	Config  cfgTypes.StoreConfig
+	Loader  PostLoader
 	Editor  editor.StoreEditor
 	Logger  *slog.Logger
 }
@@ -90,7 +102,7 @@ func NewStore(ctx context.Context, options StoreOptions) (Store, error) {
 	e := options.Editor
 	if e == nil {
 		l.Info("feed editor is not set. store will skip syncing")
-	} else {
+	} else if options.Loader == nil {
 		if err := e.Open(ctx); err != nil {
 			return nil, fmt.Errorf("failed to open editor: %w", err)
 		}
@@ -103,6 +115,7 @@ func NewStore(ctx context.Context, options StoreOptions) (Store, error) {
 	store := &StoreImpl{
 		feedId:    options.FeedId,
 		feedUri:   options.FeedUri,
+		loader:    options.Loader,
 		editor:    e,
 		posts:     make([]types.Post, 0, fitstCapacity),
 		postIndex: make(map[types.PostUri]struct{}),
@@ -152,11 +165,7 @@ func (s *StoreImpl) Load(ctx context.Context) error {
 	s.posts = make([]types.Post, 0, fitstCapacity)
 	s.postIndex = make(map[types.PostUri]struct{})
 
-	posts, err := s.editor.Load(ctx, editor.LoadParams{
-		FeedId:  s.feedId,
-		FeedUri: s.feedUri,
-		Limit:   s.config.GetTrimAt(),
-	})
+	posts, err := s.loadPosts(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load posts: %w", err)
 	}
@@ -174,9 +183,33 @@ func (s *StoreImpl) Load(ctx context.Context) error {
 	}
 }
 
+func (s *StoreImpl) loadPosts(ctx context.Context) ([]types.Post, error) {
+	if s.loader != nil {
+		return s.loader.LoadPosts(ctx, LoadPostsParams{
+			FeedID:  s.feedId,
+			FeedURI: s.feedUri,
+			Limit:   s.config.GetTrimAt(),
+		})
+	}
+	if s.editor == nil {
+		return nil, nil
+	}
+	return s.editor.Load(ctx, editor.LoadParams{
+		FeedId:  s.feedId,
+		FeedUri: s.feedUri,
+		Limit:   s.config.GetTrimAt(),
+	})
+}
+
 func (s *StoreImpl) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loader != nil {
+		return nil
+	}
+	if s.editor == nil {
+		return nil
+	}
 	if err := s.editor.Save(ctx, editor.SaveParams{
 		Posts:   s.posts,
 		FeedUri: s.feedUri,
@@ -232,19 +265,6 @@ func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs 
 	s.posts = append(s.posts, post)
 	s.postIndex[post.Uri] = struct{}{}
 
-	if s.editor != nil {
-		if err := s.editor.Add(editor.PostParams{
-			FeedUri:   s.feedUri,
-			Did:       did,
-			Rkey:      rkey,
-			Cid:       cid,
-			IndexedAt: t,
-			Langs:     langs,
-		}); err != nil {
-			return err
-		}
-	}
-
 	// Check if trim needed
 	if s.config != nil && s.config.GetTrimAt() > 0 && len(s.posts) > s.config.GetTrimAt() {
 		if err := s.trim(s.config.GetTrimRemain()); err != nil {
@@ -277,13 +297,6 @@ func (s *StoreImpl) DeleteByDid(did string) (deleted []types.Post, err error) {
 	}
 	s.posts = remainingPosts
 
-	if s.editor != nil {
-		err := s.editor.DeleteByDid(s.feedUri, did)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return deleted, nil
 }
 
@@ -299,13 +312,6 @@ func (s *StoreImpl) deletePost(did string, rkey string) error {
 			delete(s.postIndex, post.Uri)
 			break
 		}
-	}
-	if s.editor != nil {
-		return s.editor.Delete(editor.DeleteParams{
-			FeedUri: s.feedUri,
-			Did:     did,
-			Rkey:    rkey,
-		})
 	}
 	return nil
 }
@@ -353,13 +359,6 @@ func (s *StoreImpl) trim(remain int) error {
 
 	s.posts = newPosts
 	s.postIndex = newIndex
-
-	if s.editor != nil {
-		return s.editor.Trim(editor.TrimParams{
-			FeedUri: s.feedUri,
-			Count:   remain,
-		})
-	}
 	return nil
 }
 

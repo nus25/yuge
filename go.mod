@@ -21,6 +21,7 @@ require (
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/earthboundkid/versioninfo/v2 v2.24.1 // indirect
+	github.com/mattn/go-sqlite3 v1.14.44 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect

@@ -13,14 +13,21 @@ import (
 	"github.com/bluesky-social/jetstream/pkg/models"
 	"github.com/nus25/yuge/feed"
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
+	"github.com/nus25/yuge/types"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+type PostMutationCoordinator interface {
+	AddPost(ctx context.Context, params AddPostParams) error
+	DeletePost(ctx context.Context, params DeletePostParams) error
+}
+
 type Handler struct {
-	logger      *slog.Logger
-	FeedService *FeedService
-	Jsc         *jetstreamClient.Client
-	nextMet     int64
+	logger              *slog.Logger
+	FeedService         *FeedService
+	MutationCoordinator PostMutationCoordinator
+	Jsc                 *jetstreamClient.Client
+	nextMet             int64
 }
 
 func NewHandler(l *slog.Logger, fl *FeedService) *Handler {
@@ -123,7 +130,7 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 				go func(feedID string, feed feed.Feed, evt *models.Event, post *apibsky.FeedPost) {
 					postsAdded.WithLabelValues(feedID).Inc()
 					h.logger.Info("adding post", "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey, "Langs", post.Langs)
-					if err := feed.AddPost(evt.Did, evt.Commit.RKey, evt.Commit.CID, time.Now(), post.Langs); err != nil {
+					if err := h.addAcceptedPost(ctx, feedID, feed, evt, post); err != nil {
 						h.logger.Error("failed to add post", "error", err, "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey, "Langs", post.Langs)
 						return
 					}
@@ -135,15 +142,15 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 			if fi.Status.LastStatus == FeedStatusError || fi.Feed == nil {
 				continue
 			}
-			if _, exists := fi.Feed.GetPost(evt.Did, evt.Commit.RKey); exists {
-				go func(feedID string, feed feed.Feed, evt *models.Event) {
+			if post, exists := fi.Feed.GetPost(evt.Did, evt.Commit.RKey); exists {
+				go func(feedID string, feed feed.Feed, evt *models.Event, post types.Post) {
 					postsDeleted.WithLabelValues(feedID).Inc()
 					h.logger.Info("deleting post", "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
-					if err := feed.DeletePost(evt.Did, evt.Commit.RKey); err != nil {
+					if err := h.deleteAcceptedPost(ctx, feedID, feed, evt, post); err != nil {
 						h.logger.Error("failed to delete post", "error", err, "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
 						return
 					}
-				}(id, fi.Feed, evt)
+				}(id, fi.Feed, evt, post)
 			}
 		}
 	}
@@ -165,4 +172,61 @@ func (h *Handler) shouldAdd(feed feed.Feed, did string, rkey string, post *apibs
 	}
 
 	return false, nil
+}
+
+func (h *Handler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, evt *models.Event, post *apibsky.FeedPost) error {
+	run := func() error {
+		indexedAt := time.Now().UTC()
+		trimAt := 0
+		trimRemain := 0
+		if cfg := targetFeed.Config(); cfg != nil && cfg.Store() != nil {
+			trimAt = cfg.Store().GetTrimAt()
+			trimRemain = cfg.Store().GetTrimRemain()
+		}
+		if h.MutationCoordinator != nil {
+			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
+				FeedID:    feedID,
+				FeedURI:   types.FeedUri(targetFeed.FeedUri()),
+				Did:       evt.Did,
+				Rkey:      evt.Commit.RKey,
+				Cid:       evt.Commit.CID,
+				IndexedAt: indexedAt,
+				Langs:     post.Langs,
+				TrimAt:    trimAt,
+				TrimRemain: trimRemain,
+			}); err != nil {
+				return fmt.Errorf("persist accepted post: %w", err)
+			}
+		}
+		if err := targetFeed.AddPost(evt.Did, evt.Commit.RKey, evt.Commit.CID, indexedAt, post.Langs); err != nil {
+			return fmt.Errorf("update feed cache: %w", err)
+		}
+		return nil
+	}
+	if h.FeedService != nil {
+		return h.FeedService.withFeedOperationLock(feedID, run)
+	}
+	return run()
+}
+
+func (h *Handler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, evt *models.Event, post types.Post) error {
+	run := func() error {
+		if h.MutationCoordinator != nil {
+			if err := h.MutationCoordinator.DeletePost(ctx, DeletePostParams{
+				FeedID:  feedID,
+				FeedURI: types.FeedUri(targetFeed.FeedUri()),
+				Post:    post,
+			}); err != nil {
+				return fmt.Errorf("persist accepted delete: %w", err)
+			}
+		}
+		if err := targetFeed.DeletePost(evt.Did, evt.Commit.RKey); err != nil {
+			return fmt.Errorf("update feed cache after delete: %w", err)
+		}
+		return nil
+	}
+	if h.FeedService != nil {
+		return h.FeedService.withFeedOperationLock(feedID, run)
+	}
+	return run()
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	_ "github.com/mattn/go-sqlite3" // Register the SQLite driver for upcoming SQLite-backed persistence.
 	"github.com/nus25/yuge/subscriber"
 	"github.com/urfave/cli/v2"
 )

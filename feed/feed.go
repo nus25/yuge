@@ -53,6 +53,9 @@ type FeedOptions struct {
 	// feed configuration.
 	Config cfgTypes.FeedConfig
 
+	// StoreLoader hydrates the in-memory cache from an authoritative source.
+	StoreLoader store.PostLoader
+
 	// StoreEditor is the interface for storing and retrieving feed data.
 	StoreEditor editor.StoreEditor
 
@@ -96,6 +99,7 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 		FeedId:  feedId,
 		FeedUri: types.FeedUri(feedUri),
 		Config:  cfg.Store(),
+		Loader:  opts.StoreLoader,
 		Editor:  opts.StoreEditor,
 		Logger:  lg,
 	}
