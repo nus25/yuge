@@ -15,7 +15,7 @@ import (
 const defaultProjectionPollInterval = 250 * time.Millisecond
 
 type gyokaProjectionRuntimeOptions struct {
-	pollInterval time.Duration
+	pollInterval  time.Duration
 	clientOptions []editor.ClientOptionFunc
 }
 

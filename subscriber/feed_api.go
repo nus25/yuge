@@ -763,14 +763,14 @@ func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, tar
 		}
 		if h.MutationCoordinator != nil {
 			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
-				FeedID:    feedID,
-				FeedURI:   types.FeedUri(targetFeed.FeedUri()),
-				Did:       did,
-				Rkey:      rkey,
-				Cid:       cid,
-				IndexedAt: indexedAt,
-				Langs:     langs,
-				TrimAt:    trimAt,
+				FeedID:     feedID,
+				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
+				Did:        did,
+				Rkey:       rkey,
+				Cid:        cid,
+				IndexedAt:  indexedAt,
+				Langs:      langs,
+				TrimAt:     trimAt,
 				TrimRemain: trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted post: %w", err)

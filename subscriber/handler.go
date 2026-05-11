@@ -185,14 +185,14 @@ func (h *Handler) addAcceptedPost(ctx context.Context, feedID string, targetFeed
 		}
 		if h.MutationCoordinator != nil {
 			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
-				FeedID:    feedID,
-				FeedURI:   types.FeedUri(targetFeed.FeedUri()),
-				Did:       evt.Did,
-				Rkey:      evt.Commit.RKey,
-				Cid:       evt.Commit.CID,
-				IndexedAt: indexedAt,
-				Langs:     post.Langs,
-				TrimAt:    trimAt,
+				FeedID:     feedID,
+				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
+				Did:        evt.Did,
+				Rkey:       evt.Commit.RKey,
+				Cid:        evt.Commit.CID,
+				IndexedAt:  indexedAt,
+				Langs:      post.Langs,
+				TrimAt:     trimAt,
 				TrimRemain: trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted post: %w", err)
