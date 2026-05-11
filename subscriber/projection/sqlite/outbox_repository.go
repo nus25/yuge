@@ -23,11 +23,13 @@ type OutboxRepository struct {
 	db dbtx
 }
 
+const defaultProcessingReclaimTimeout = 2 * time.Minute
+
 func NewOutboxRepository(db dbtx) *OutboxRepository {
 	return &OutboxRepository{db: db}
 }
 
-func listReadyPendingEntries(ctx context.Context, querier dbtx, target string, now string, limit int) ([]projectionrepo.Entry, error) {
+func listReadyPendingEntries(ctx context.Context, querier dbtx, target string, now string, staleBefore string, limit int) ([]projectionrepo.Entry, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -37,14 +39,19 @@ func listReadyPendingEntries(ctx context.Context, querier dbtx, target string, n
 			created_at, updated_at, COALESCE(completed_at, '')
 		FROM projection_outbox
 		WHERE target = ?
-			AND status = 'pending'
 			AND (
-				COALESCE(last_error, '') = ''
-				OR (next_retry_at IS NOT NULL AND next_retry_at <> '' AND next_retry_at <= ?)
+				(
+					status = 'pending'
+					AND (
+						COALESCE(last_error, '') = ''
+						OR (next_retry_at IS NOT NULL AND next_retry_at <> '' AND next_retry_at <= ?)
+					)
+				)
+				OR (status = 'processing' AND updated_at <= ?)
 			)
 		ORDER BY id ASC
 		LIMIT ?;
-	`, target, now, limit)
+	`, target, now, staleBefore, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list ready pending outbox entries: %w", err)
 	}
@@ -202,7 +209,8 @@ func (r *OutboxRepository) ClaimNextPendingBatch(ctx context.Context, params pro
 	}()
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	entries, err := listReadyPendingEntries(ctx, tx, params.Target, now, params.Limit)
+	staleBefore := time.Now().UTC().Add(-defaultProcessingReclaimTimeout).Format(time.RFC3339Nano)
+	entries, err := listReadyPendingEntries(ctx, tx, params.Target, now, staleBefore, params.Limit)
 	if err != nil {
 		return nil, false, fmt.Errorf("select pending outbox entries: %w", err)
 	}
@@ -225,8 +233,11 @@ func (r *OutboxRepository) ClaimNextPendingBatch(ctx context.Context, params pro
 		result, err := tx.ExecContext(ctx, `
 			UPDATE projection_outbox
 			SET status = 'processing', updated_at = ?, completed_at = NULL
-			WHERE id = ? AND status = 'pending';
-		`, now, entry.ID)
+			WHERE id = ? AND (
+				status = 'pending'
+				OR (status = 'processing' AND updated_at <= ?)
+			);
+		`, now, entry.ID, staleBefore)
 		if err != nil {
 			return nil, false, fmt.Errorf("claim pending outbox entry %d: %w", entry.ID, err)
 		}

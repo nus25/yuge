@@ -95,6 +95,98 @@ func TestStartGyokaProjectionRuntime_CompletesPendingEntry(t *testing.T) {
 	}
 }
 
+func TestStartGyokaProjectionRuntime_ReclaimsStaleProcessingEntry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	persistence, err := openSQLiteRuntimePersistence(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("openSQLiteRuntimePersistence() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := persistence.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := persistence.mutationCoordinator.AddPost(ctx, AddPostParams{
+		FeedID:     "feed-1",
+		FeedURI:    "at://did:plc:test/app.bsky.feed.generator/sample",
+		Did:        "did:plc:user1",
+		Rkey:       "post1",
+		Cid:        "cid-1",
+		IndexedAt:  time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC),
+		Langs:      []string{"ja"},
+		MutationID: "mutation-1",
+	}); err != nil {
+		t.Fatalf("AddPost() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(persistence.loaderDB)
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	staleUpdatedAt := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := persistence.loaderDB.ExecContext(ctx, `UPDATE projection_outbox SET updated_at = ? WHERE id = ?;`, staleUpdatedAt, claimed.ID); err != nil {
+		t.Fatalf("ExecContext() error = %v", err)
+	}
+
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/gyoka/ping":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Gyoka is available"})
+		case "/api/feed/addPost":
+			requests <- r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"message": "success"})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	runtime, err := startGyokaProjectionRuntime(ctx, slog.New(slog.NewTextHandler(testWriter{t}, nil)), persistence.mutationDB, server.URL, gyokaProjectionRuntimeOptions{
+		pollInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("startGyokaProjectionRuntime() error = %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := runtime.Close(shutdownCtx); err != nil {
+			t.Fatalf("runtime.Close() error = %v", err)
+		}
+	})
+
+	select {
+	case <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Gyoka add request")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		completedEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
+		if err != nil {
+			t.Fatalf("ListByStatus() error = %v", err)
+		}
+		if len(completedEntries) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestFeedService_ReloadFeed_DoesNotRestartGyokaProjectionRuntime(t *testing.T) {
 	t.Parallel()
 

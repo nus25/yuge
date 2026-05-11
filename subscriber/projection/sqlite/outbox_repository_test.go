@@ -151,6 +151,110 @@ func TestOutboxRepositoryClaimAndCompleteSinglePendingRow(t *testing.T) {
 	}
 }
 
+func TestOutboxRepositoryClaimNextPending_ReclaimsOnlyStaleProcessingRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-reclaim.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	fixtures := []projectionrepo.EnqueueParams{
+		{
+			FeedID:      "feed-stale",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/stale",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-stale",
+			SubjectKey:  "feed-stale:post-1",
+			OpKey:       "m-stale:add:post-1",
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-fresh",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/fresh",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-fresh",
+			SubjectKey:  "feed-fresh:post-2",
+			OpKey:       "m-fresh:add:post-2",
+			PayloadJSON: `{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}`,
+			Status:      "pending",
+		},
+	}
+	for _, fixture := range fixtures {
+		if err := repo.Enqueue(ctx, fixture); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+	}
+
+	staleClaimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() stale error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() stale ok = false, want true")
+	}
+
+	freshClaimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() fresh error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() fresh ok = false, want true")
+	}
+
+	staleUpdatedAt := time.Now().UTC().Add(-defaultProcessingReclaimTimeout - time.Minute).Format(time.RFC3339Nano)
+	freshUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `UPDATE projection_outbox SET updated_at = ? WHERE id = ?;`, staleUpdatedAt, staleClaimed.ID); err != nil {
+		t.Fatalf("ExecContext() stale updated_at error = %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE projection_outbox SET updated_at = ? WHERE id = ?;`, freshUpdatedAt, freshClaimed.ID); err != nil {
+		t.Fatalf("ExecContext() fresh updated_at error = %v", err)
+	}
+
+	reclaimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() reclaim error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() reclaim ok = false, want true")
+	}
+	if reclaimed.ID != staleClaimed.ID {
+		t.Fatalf("reclaimed id = %d, want %d", reclaimed.ID, staleClaimed.ID)
+	}
+
+	processingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "processing", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() processing error = %v", err)
+	}
+	if len(processingEntries) != 2 {
+		t.Fatalf("processing entries len = %d, want 2", len(processingEntries))
+	}
+	for _, entry := range processingEntries {
+		if entry.ID == freshClaimed.ID && entry.UpdatedAt != freshUpdatedAt {
+			t.Fatalf("fresh processing row was unexpectedly reclaimed: updated_at = %s, want %s", entry.UpdatedAt, freshUpdatedAt)
+		}
+	}
+}
+
 func TestOutboxRepositoryMarkRetryableFailureRequeuesClaimedRow(t *testing.T) {
 	t.Parallel()
 
