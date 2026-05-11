@@ -103,11 +103,21 @@ func (r *OutboxRepository) ListByStatus(ctx context.Context, params projectionre
 
 func (r *OutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT status, COUNT(*)
-		FROM projection_outbox
-		WHERE target = ?
-		GROUP BY status
-	`, params.Target)
+		SELECT status, count
+		FROM (
+			SELECT status, COUNT(*) AS count, 0 AS sort_order
+			FROM projection_outbox
+			WHERE target = ?
+			GROUP BY status
+
+			UNION ALL
+
+			SELECT 'failed' AS status, COUNT(*) AS count, 1 AS sort_order
+			FROM projection_outbox
+			WHERE target = ? AND status = 'pending' AND COALESCE(last_error, '') <> ''
+		)
+		ORDER BY sort_order ASC, status ASC
+	`, params.Target, params.Target)
 	if err != nil {
 		return nil, fmt.Errorf("count outbox entries by status: %w", err)
 	}

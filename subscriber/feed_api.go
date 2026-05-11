@@ -367,6 +367,17 @@ func projectionResponseFromEntry(entry projectionrepo.Entry) projectionOpRespons
 	}
 }
 
+func projectionSummaryCounts(counts []projectionrepo.StatusCount) map[string]int64 {
+	summary := make(map[string]int64, len(projectionOutboxStatuses))
+	for _, status := range projectionOutboxStatuses {
+		summary[status] = 0
+	}
+	for _, count := range counts {
+		summary[count.Status] = count.Count
+	}
+	return summary
+}
+
 func parseProjectionOpID(c *gin.Context) (int64, bool) {
 	entryID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || entryID <= 0 {
@@ -428,6 +439,25 @@ func (h *FeedApiHandler) ListProjectionOps(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"entries": responseEntries,
+	})
+}
+
+func (h *FeedApiHandler) GetProjectionOpSummary(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+
+	target := c.DefaultQuery("target", "gyoka")
+	counts, err := h.ProjectionOutbox.CountByStatus(c.Request.Context(), projectionrepo.CountByStatusParams{Target: target})
+	if err != nil {
+		respondWithError(c, http.StatusInternalServerError, "failed to summarize projection ops", err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"target": target,
+		"counts": projectionSummaryCounts(counts),
 	})
 }
 

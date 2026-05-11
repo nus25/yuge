@@ -3,6 +3,7 @@ package subscriber
 import (
 	"context"
 	"testing"
+	"time"
 
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
@@ -36,6 +37,17 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 			Status:      "pending",
 		},
 		{
+			FeedID:      "feed-ready",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/ready",
+			Target:      target,
+			Operation:   "add",
+			MutationID:  "m-ready",
+			SubjectKey:  "subject-ready",
+			OpKey:       "op-ready",
+			PayloadJSON: `{}`,
+			Status:      "pending",
+		},
+		{
 			FeedID:      "feed-completed",
 			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/completed",
 			Target:      target,
@@ -64,12 +76,27 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 		}
 	}
 
-	completedEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
+	failedEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
 	if err != nil {
 		t.Fatalf("ClaimNextPending() first error = %v", err)
 	}
 	if !ok {
 		t.Fatal("ClaimNextPending() first ok = false, want true")
+	}
+	if err := repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
+		ID:          failedEntry.ID,
+		LastError:   "boom",
+		NextRetryAt: time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("MarkRetryableFailure() error = %v", err)
+	}
+
+	completedEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() second error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() second ok = false, want true")
 	}
 	if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: completedEntry.ID}); err != nil {
 		t.Fatalf("MarkCompleted() error = %v", err)
@@ -77,10 +104,10 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 
 	deadEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
 	if err != nil {
-		t.Fatalf("ClaimNextPending() second error = %v", err)
+		t.Fatalf("ClaimNextPending() third error = %v", err)
 	}
 	if !ok {
-		t.Fatal("ClaimNextPending() second ok = false, want true")
+		t.Fatal("ClaimNextPending() third ok = false, want true")
 	}
 	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: deadEntry.ID, LastError: "boom"}); err != nil {
 		t.Fatalf("MarkDead() error = %v", err)
@@ -90,13 +117,14 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 	projectionOutboxEntries.WithLabelValues(target, "processing").Set(99)
 	projectionOutboxEntries.WithLabelValues(target, "completed").Set(99)
 	projectionOutboxEntries.WithLabelValues(target, "dead").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "failed").Set(99)
 
 	if err := collectProjectionOutboxMetrics(ctx, repo, target); err != nil {
 		t.Fatalf("collectProjectionOutboxMetrics() error = %v", err)
 	}
 
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "pending")); got != 1 {
-		t.Fatalf("pending gauge = %v, want 1", got)
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "pending")); got != 2 {
+		t.Fatalf("pending gauge = %v, want 2", got)
 	}
 	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "processing")); got != 0 {
 		t.Fatalf("processing gauge = %v, want 0", got)
@@ -106,6 +134,9 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 	}
 	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "dead")); got != 1 {
 		t.Fatalf("dead gauge = %v, want 1", got)
+	}
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "failed")); got != 1 {
+		t.Fatalf("failed gauge = %v, want 1", got)
 	}
 }
 

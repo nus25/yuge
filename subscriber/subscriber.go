@@ -203,6 +203,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			r.POST("/api/jetstream/disconnect", jetstreamAPI.Disconnect)
 			r.GET("/api/jetstream/status", jetstreamAPI.Status)
 			r.GET("/api/admin/projection/ops", feedAPI.ListProjectionOps)
+			r.GET("/api/admin/projection/ops/summary", feedAPI.GetProjectionOpSummary)
 			r.POST("/api/admin/projection/ops/:id/retry", feedAPI.RetryProjectionOp)
 			r.DELETE("/api/admin/projection/ops/:id", feedAPI.DeleteProjectionOp)
 			r.POST("/api/admin/projection/ops/purge-completed", feedAPI.PurgeCompletedProjectionOps)

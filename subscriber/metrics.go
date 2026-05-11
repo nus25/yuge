@@ -73,7 +73,7 @@ var (
 	}, []string{"target", "status"})
 )
 
-var projectionOutboxStatuses = []string{"pending", "processing", "completed", "dead"}
+var projectionOutboxStatuses = []string{"pending", "processing", "completed", "dead", "failed"}
 
 func updateMetrics(f feed.Feed) {
 	ms := f.Metrics()
