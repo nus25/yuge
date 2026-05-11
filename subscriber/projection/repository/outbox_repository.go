@@ -46,6 +46,11 @@ type ClaimNextPendingParams struct {
 	Target string
 }
 
+type ClaimNextPendingBatchParams struct {
+	Target string
+	Limit  int
+}
+
 type MarkCompletedParams struct {
 	ID int64
 }
@@ -54,6 +59,11 @@ type MarkRetryableFailureParams struct {
 	ID          int64
 	LastError   string
 	NextRetryAt time.Time
+}
+
+type MarkFailedParams struct {
+	ID        int64
+	LastError string
 }
 
 type MarkDeadParams struct {
@@ -88,8 +98,10 @@ type OutboxRepository interface {
 	ListByStatus(ctx context.Context, params ListByStatusParams) ([]Entry, error)
 	CountByStatus(ctx context.Context, params CountByStatusParams) ([]StatusCount, error)
 	ClaimNextPending(ctx context.Context, params ClaimNextPendingParams) (Entry, bool, error)
+	ClaimNextPendingBatch(ctx context.Context, params ClaimNextPendingBatchParams) ([]Entry, bool, error)
 	MarkCompleted(ctx context.Context, params MarkCompletedParams) error
 	MarkRetryableFailure(ctx context.Context, params MarkRetryableFailureParams) error
+	MarkFailed(ctx context.Context, params MarkFailedParams) error
 	MarkDead(ctx context.Context, params MarkDeadParams) error
 	Requeue(ctx context.Context, params RequeueParams) error
 	Delete(ctx context.Context, params DeleteParams) error

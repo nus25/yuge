@@ -518,13 +518,216 @@ func TestOutboxRepositoryPurgeCompletedDeletesLimitedRows(t *testing.T) {
 	if deletedCount != 2 {
 		t.Fatalf("deletedCount = %d, want 2", deletedCount)
 	}
-
 	completedEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
 	if err != nil {
 		t.Fatalf("ListByStatus() error = %v", err)
 	}
 	if len(completedEntries) != 1 {
 		t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
+	}
+
+}
+
+func TestOutboxRepositoryClaimNextPendingBatchClaimsContiguousAddsOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-claim-batch.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	fixtures := []projectionrepo.EnqueueParams{
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-1",
+			SubjectKey:  "feed-1:post-1",
+			OpKey:       "m-1:add:post-1",
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-2",
+			SubjectKey:  "feed-1:post-2",
+			OpKey:       "m-2:add:post-2",
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post2"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "delete",
+			MutationID:  "m-3",
+			SubjectKey:  "feed-1:post-3",
+			OpKey:       "m-3:delete:post-3",
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post3"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-4",
+			SubjectKey:  "feed-1:post-4",
+			OpKey:       "m-4:add:post-4",
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post4"}`,
+			Status:      "pending",
+		},
+	}
+	for _, fixture := range fixtures {
+		if err := repo.Enqueue(ctx, fixture); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+	}
+
+	entries, ok, err := repo.ClaimNextPendingBatch(ctx, projectionrepo.ClaimNextPendingBatchParams{Target: "gyoka", Limit: 10})
+	if err != nil {
+		t.Fatalf("ClaimNextPendingBatch() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPendingBatch() ok = false, want true")
+	}
+	if len(entries) != 2 {
+		t.Fatalf("ClaimNextPendingBatch() len = %d, want 2", len(entries))
+	}
+	for _, entry := range entries {
+		if entry.Operation != "add" {
+			t.Fatalf("claimed operation = %s, want add", entry.Operation)
+		}
+		if entry.Status != "processing" {
+			t.Fatalf("claimed status = %s, want processing", entry.Status)
+		}
+	}
+
+	pendingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() pending error = %v", err)
+	}
+	if len(pendingEntries) != 2 {
+		t.Fatalf("pending entries len = %d, want 2", len(pendingEntries))
+	}
+	if pendingEntries[0].Operation != "delete" {
+		t.Fatalf("first pending operation = %s, want delete", pendingEntries[0].Operation)
+	}
+}
+
+func TestOutboxRepositoryClaimNextPendingSkipsManualFailedRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-skip-failed.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-failed",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/failed",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-failed",
+		SubjectKey:  "feed-failed:post-1",
+		OpKey:       "m-failed:add:post-1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() failed entry error = %v", err)
+	}
+	claimedFailed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() failed entry error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() failed entry ok = false, want true")
+	}
+	if err := repo.MarkFailed(ctx, projectionrepo.MarkFailedParams{ID: claimedFailed.ID, LastError: "batch add failed"}); err != nil {
+		t.Fatalf("MarkFailed() error = %v", err)
+	}
+
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-ready",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/ready",
+		Target:      "gyoka",
+		Operation:   "delete",
+		MutationID:  "m-ready",
+		SubjectKey:  "feed-ready:post-2",
+		OpKey:       "m-ready:delete:post-2",
+		PayloadJSON: `{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() ready entry error = %v", err)
+	}
+
+	claimedReady, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() ready entry error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ready entry ok = false, want true")
+	}
+	if claimedReady.ID == claimedFailed.ID {
+		t.Fatal("ClaimNextPending() claimed manual failed row, want ready row")
+	}
+	if claimedReady.Operation != "delete" {
+		t.Fatalf("claimed ready operation = %s, want delete", claimedReady.Operation)
+	}
+
+	if err := repo.Requeue(ctx, projectionrepo.RequeueParams{ID: claimedFailed.ID}); err != nil {
+		t.Fatalf("Requeue() error = %v", err)
+	}
+
+	if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: claimedReady.ID}); err != nil {
+		t.Fatalf("MarkCompleted() ready entry error = %v", err)
+	}
+
+	requeued, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() requeued error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() requeued ok = false, want true")
+	}
+	if requeued.ID != claimedFailed.ID {
+		t.Fatalf("requeued id = %d, want %d", requeued.ID, claimedFailed.ID)
 	}
 }
 

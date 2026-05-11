@@ -97,11 +97,19 @@ func (r *fakeOutboxRepository) ClaimNextPending(ctx context.Context, params proj
 	return projectionrepo.Entry{}, false, nil
 }
 
+func (r *fakeOutboxRepository) ClaimNextPendingBatch(ctx context.Context, params projectionrepo.ClaimNextPendingBatchParams) ([]projectionrepo.Entry, bool, error) {
+	return nil, false, nil
+}
+
 func (r *fakeOutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
 	return nil
 }
 
 func (r *fakeOutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
+	return nil
+}
+
+func (r *fakeOutboxRepository) MarkFailed(ctx context.Context, params projectionrepo.MarkFailedParams) error {
 	return nil
 }
 

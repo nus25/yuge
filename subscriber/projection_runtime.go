@@ -82,6 +82,8 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 				case projection.ProcessOutcomeDead:
 					projectionOutboxErrors.WithLabelValues("gyoka", "non_retryable").Inc()
 					projectionOutboxDead.WithLabelValues("gyoka").Inc()
+				case projection.ProcessOutcomeFailed:
+					projectionOutboxErrors.WithLabelValues("gyoka", "manual").Inc()
 				case projection.ProcessOutcomeRetried:
 					projectionOutboxErrors.WithLabelValues("gyoka", "retryable").Inc()
 					projectionOutboxRetried.WithLabelValues("gyoka").Inc()

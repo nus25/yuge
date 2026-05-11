@@ -918,9 +918,10 @@ func TestGyokaEditorErrorMessages(t *testing.T) {
 func TestBatchAdd(t *testing.T) {
 	logger := slog.Default()
 
-	t.Run("BatchAdd_MultipleAdds", func(t *testing.T) {
+	t.Run("Add_MultipleAddsStaySingleRequests", func(t *testing.T) {
 		var requestCount int32
-		var lastBatchSize int
+		var addRequestCount int32
+		var batchRequestCount int32
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/gyoka/ping" {
@@ -934,6 +935,7 @@ func TestBatchAdd(t *testing.T) {
 			atomic.AddInt32(&requestCount, 1)
 
 			if r.URL.Path == "/api/feed/addPost" {
+				atomic.AddInt32(&addRequestCount, 1)
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]any{
 					"message": "success",
@@ -942,27 +944,7 @@ func TestBatchAdd(t *testing.T) {
 			}
 
 			if r.URL.Path == "/api/feed/batchAddPosts" {
-				var req struct {
-					Entries []struct {
-						Feed  string `json:"feed"`
-						Posts []struct {
-							Uri string `json:"uri"`
-							Cid string `json:"cid"`
-						} `json:"posts"`
-					} `json:"entries"`
-				}
-				err := json.NewDecoder(r.Body).Decode(&req)
-				if err != nil {
-					t.Errorf("failed to decode batch request body: %v", err)
-					return
-				}
-
-				totalPosts := 0
-				for _, entry := range req.Entries {
-					totalPosts += len(entry.Posts)
-				}
-				lastBatchSize = totalPosts
-
+				atomic.AddInt32(&batchRequestCount, 1)
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]any{
 					"message": "batch success",
@@ -1003,15 +985,15 @@ func TestBatchAdd(t *testing.T) {
 			}
 		}
 
-		time.Sleep(2 * time.Second)
-
 		finalRequestCount := atomic.LoadInt32(&requestCount)
-		if finalRequestCount != 2 {
-			t.Errorf("expected 2 requests (1 add + 1 batch), got %d", finalRequestCount)
+		if finalRequestCount != 3 {
+			t.Errorf("expected 3 add requests, got %d", finalRequestCount)
 		}
-
-		if lastBatchSize != 2 {
-			t.Errorf("expected batch size 2, got %d", lastBatchSize)
+		if atomic.LoadInt32(&addRequestCount) != 3 {
+			t.Errorf("expected 3 add requests, got %d", atomic.LoadInt32(&addRequestCount))
+		}
+		if atomic.LoadInt32(&batchRequestCount) != 0 {
+			t.Errorf("expected 0 batch requests, got %d", atomic.LoadInt32(&batchRequestCount))
 		}
 	})
 

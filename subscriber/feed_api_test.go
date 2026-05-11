@@ -868,12 +868,20 @@ func (noopOutboxRepository) ClaimNextPending(ctx context.Context, params project
 	return projectionrepo.Entry{}, false, errors.New("unexpected ClaimNextPending call")
 }
 
+func (noopOutboxRepository) ClaimNextPendingBatch(ctx context.Context, params projectionrepo.ClaimNextPendingBatchParams) ([]projectionrepo.Entry, bool, error) {
+	return nil, false, errors.New("unexpected ClaimNextPendingBatch call")
+}
+
 func (noopOutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
 	return errors.New("unexpected MarkCompleted call")
 }
 
 func (noopOutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
 	return errors.New("unexpected MarkRetryableFailure call")
+}
+
+func (noopOutboxRepository) MarkFailed(ctx context.Context, params projectionrepo.MarkFailedParams) error {
+	return errors.New("unexpected MarkFailed call")
 }
 
 func (noopOutboxRepository) MarkDead(ctx context.Context, params projectionrepo.MarkDeadParams) error {

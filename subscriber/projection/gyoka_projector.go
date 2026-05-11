@@ -18,6 +18,7 @@ var ErrNonRetryableProjection = errors.New("non-retryable projection error")
 
 type GyokaMutator interface {
 	Add(params gyoka.PostParams) error
+	BatchAdd(params gyoka.BatchPostParams) error
 	Delete(params gyoka.DeleteParams) error
 }
 
@@ -93,4 +94,48 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 	default:
 		return markNonRetryableProjection(fmt.Errorf("%w: %s", ErrUnsupportedProjectionOperation, entry.Operation))
 	}
+}
+
+func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionrepo.Entry) error {
+	_ = ctx
+	if p == nil || p.mutator == nil {
+		return markNonRetryableProjection(fmt.Errorf("gyoka mutator is required"))
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) == 1 {
+		return p.Project(ctx, entries[0])
+	}
+
+	batchEntries := make([]gyoka.PostParams, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Operation != "add" {
+			return markNonRetryableProjection(fmt.Errorf("%w: %s", ErrUnsupportedProjectionOperation, entry.Operation))
+		}
+		var payload projectionPayload
+		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
+			return markNonRetryableProjection(fmt.Errorf("decode projection payload: %w", err))
+		}
+		parsedURI, err := util.ParseAtUri(string(payload.Post.Uri))
+		if err != nil {
+			return markNonRetryableProjection(fmt.Errorf("parse projected post uri: %w", err))
+		}
+		indexedAt, err := time.Parse(time.RFC3339Nano, payload.Post.IndexedAt)
+		if err != nil {
+			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
+		}
+		batchEntries = append(batchEntries, gyoka.PostParams{
+			FeedUri:   payload.FeedURI,
+			Did:       parsedURI.Did,
+			Rkey:      parsedURI.Rkey,
+			Cid:       payload.Post.Cid,
+			IndexedAt: indexedAt,
+			Langs:     payload.Post.Langs,
+		})
+	}
+	if err := p.mutator.BatchAdd(gyoka.BatchPostParams{Entries: batchEntries}); err != nil {
+		return fmt.Errorf("project add batch: %w", err)
+	}
+	return nil
 }

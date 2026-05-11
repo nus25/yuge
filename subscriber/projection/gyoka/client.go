@@ -23,7 +23,6 @@ const (
 	defaultIdleConnTimeout     = 90 * time.Second
 	defaultMaxRetries          = 3
 	defaultRetryWaitTime       = 2 * time.Second
-	defaultBatchInterval       = 1 * time.Second
 	maxBatchSize               = 25
 )
 
@@ -61,13 +60,6 @@ type GyokaEditor struct {
 	closeMu   sync.RWMutex
 	requestMu sync.RWMutex
 	closing   bool
-
-	batchPool       []PostParams
-	batchMu         sync.Mutex
-	batchTimer      *time.Timer
-	lastBatchTime   time.Time
-	batchInterval   time.Duration
-	firstAddInBatch bool
 }
 
 type customHeaderTransport struct {
@@ -196,16 +188,13 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 	}
 
 	return &GyokaEditor{
-		client:          c,
-		option:          opt,
-		logger:          logger,
-		requestCh:       make(chan *feedRequest, 100),
-		done:            make(chan struct{}),
-		mu:              sync.RWMutex{},
-		requestMu:       sync.RWMutex{},
-		batchPool:       make([]PostParams, 0, 100),
-		batchInterval:   defaultBatchInterval,
-		firstAddInBatch: true,
+		client:    c,
+		option:    opt,
+		logger:    logger,
+		requestCh: make(chan *feedRequest, 100),
+		done:      make(chan struct{}),
+		mu:        sync.RWMutex{},
+		requestMu: sync.RWMutex{},
 	}, nil
 }
 
@@ -608,96 +597,13 @@ func (e *GyokaEditor) Add(params PostParams) error {
 		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-
-	e.batchMu.Lock()
-
-	if e.firstAddInBatch {
-		e.firstAddInBatch = false
-		e.lastBatchTime = time.Now()
-		e.batchMu.Unlock()
-
-		errCh := make(chan error, 1)
-		e.requestCh <- &feedRequest{
-			operation: "add",
-			AddParams: params,
-			errCh:     errCh,
-		}
-
-		e.batchMu.Lock()
-		if e.batchTimer != nil {
-			e.batchTimer.Stop()
-		}
-		e.batchTimer = time.AfterFunc(e.batchInterval, func() {
-			e.flushBatch()
-		})
-		e.batchMu.Unlock()
-
-		return <-errCh
+	errCh := make(chan error, 1)
+	e.requestCh <- &feedRequest{
+		operation: "add",
+		AddParams: params,
+		errCh:     errCh,
 	}
-
-	e.batchPool = append(e.batchPool, params)
-
-	if e.batchTimer == nil {
-		e.batchTimer = time.AfterFunc(e.batchInterval, func() {
-			e.flushBatch()
-		})
-	}
-
-	e.batchMu.Unlock()
-
-	return nil
-}
-
-func (e *GyokaEditor) flushBatch() {
-	e.batchMu.Lock()
-
-	if len(e.batchPool) == 0 {
-		e.firstAddInBatch = true
-		e.batchTimer = nil
-		e.batchMu.Unlock()
-		return
-	}
-
-	allEntries := make([]PostParams, len(e.batchPool))
-	for i, p := range e.batchPool {
-		allEntries[i] = PostParams{
-			FeedUri:   p.FeedUri,
-			Did:       p.Did,
-			Rkey:      p.Rkey,
-			Cid:       p.Cid,
-			IndexedAt: p.IndexedAt,
-			Langs:     p.Langs,
-		}
-	}
-
-	e.batchPool = e.batchPool[:0]
-	e.firstAddInBatch = true
-	e.batchTimer = nil
-	e.lastBatchTime = time.Now()
-
-	e.batchMu.Unlock()
-
-	totalCount := len(allEntries)
-	for i := 0; i < totalCount; i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > totalCount {
-			end = totalCount
-		}
-		batchEntries := allEntries[i:end]
-
-		errCh := make(chan error, 1)
-		e.requestCh <- &feedRequest{
-			operation:      "batchAdd",
-			BatchAddParams: BatchPostParams{Entries: batchEntries},
-			errCh:          errCh,
-		}
-
-		if err := <-errCh; err != nil {
-			e.logger.Error("batch add failed", "error", err, "count", len(batchEntries), "batch", i/maxBatchSize+1)
-		} else {
-			e.logger.Info("batch add succeeded", "count", len(batchEntries), "batch", i/maxBatchSize+1, "total", totalCount)
-		}
-	}
+	return <-errCh
 }
 
 func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
@@ -848,13 +754,6 @@ func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
 
 func (e *GyokaEditor) Close(ctx context.Context) error {
 	if e.client != nil {
-		e.batchMu.Lock()
-		if e.batchTimer != nil {
-			e.batchTimer.Stop()
-		}
-		e.batchMu.Unlock()
-		e.flushBatch()
-
 		e.closeMu.Lock()
 		if !e.closing {
 			e.closing = true
