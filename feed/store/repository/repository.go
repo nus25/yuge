@@ -44,6 +44,7 @@ type FeedRepository interface {
 	PutPost(ctx context.Context, params PutPostParams) error
 	ListPosts(ctx context.Context, params ListPostsParams) ([]types.Post, error)
 	DeletePost(ctx context.Context, params DeletePostParams) error
+	DeleteAllPosts(ctx context.Context, feedID string) error
 	TrimOverflow(ctx context.Context, params TrimOverflowParams) ([]types.Post, error)
 	PutFeedState(ctx context.Context, params PutFeedStateParams) error
 	GetFeedState(ctx context.Context, feedID string) (FeedState, bool, error)

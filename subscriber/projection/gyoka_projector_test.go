@@ -16,12 +16,15 @@ type spyGyokaMutator struct {
 	addErr      error
 	batchAddErr error
 	deleteErr   error
+	trimErr     error
 	addCalls    int
 	batchCalls  int
 	deleteCalls int
+	trimCalls   int
 	lastAdd     gyoka.PostParams
 	lastBatch   gyoka.BatchPostParams
 	lastDelete  gyoka.DeleteParams
+	lastTrim    gyoka.TrimParams
 }
 
 func (m *spyGyokaMutator) Add(params gyoka.PostParams) error {
@@ -40,6 +43,12 @@ func (m *spyGyokaMutator) Delete(params gyoka.DeleteParams) error {
 	m.deleteCalls++
 	m.lastDelete = params
 	return m.deleteErr
+}
+
+func (m *spyGyokaMutator) Trim(params gyoka.TrimParams) error {
+	m.trimCalls++
+	m.lastTrim = params
+	return m.trimErr
 }
 
 func TestGyokaProjector_Project_AddEntry(t *testing.T) {
@@ -113,7 +122,7 @@ func TestGyokaProjector_Project_RejectsUnsupportedOperation(t *testing.T) {
 	err := projector.Project(context.Background(), projectionrepo.Entry{
 		ID:          3,
 		Target:      "gyoka",
-		Operation:   "trim",
+		Operation:   "noop",
 		PayloadJSON: `{}`,
 	})
 	if err == nil {
@@ -121,6 +130,32 @@ func TestGyokaProjector_Project_RejectsUnsupportedOperation(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnsupportedProjectionOperation) {
 		t.Fatalf("Project() error = %v, want ErrUnsupportedProjectionOperation", err)
+	}
+}
+
+func TestGyokaProjector_Project_TrimEntry(t *testing.T) {
+	t.Parallel()
+
+	mutator := &spyGyokaMutator{}
+	projector := NewGyokaProjector(mutator)
+	entry := projectionrepo.Entry{
+		ID:          3,
+		Target:      "gyoka",
+		Operation:   "trim",
+		PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","count":0}`,
+	}
+
+	if err := projector.Project(context.Background(), entry); err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	if mutator.trimCalls != 1 {
+		t.Fatalf("Trim() calls = %d, want 1", mutator.trimCalls)
+	}
+	if mutator.lastTrim.FeedUri != types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample") {
+		t.Fatalf("Trim() FeedUri = %s", mutator.lastTrim.FeedUri)
+	}
+	if mutator.lastTrim.Count != 0 {
+		t.Fatalf("Trim() Count = %d, want 0", mutator.lastTrim.Count)
 	}
 }
 

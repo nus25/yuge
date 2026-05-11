@@ -36,6 +36,14 @@ type EnqueueParams struct {
 	Status      string
 }
 
+type ClearFeedParams struct {
+	FeedID     string
+	FeedURI    string
+	Target     string
+	MutationID string
+	Count      int
+}
+
 type ListByStatusParams struct {
 	Target string
 	Status string
@@ -95,6 +103,7 @@ type StatusCount struct {
 
 type OutboxRepository interface {
 	Enqueue(ctx context.Context, params EnqueueParams) error
+	ClearFeed(ctx context.Context, params ClearFeedParams) error
 	ListByStatus(ctx context.Context, params ListByStatusParams) ([]Entry, error)
 	CountByStatus(ctx context.Context, params CountByStatusParams) ([]StatusCount, error)
 	ClaimNextPending(ctx context.Context, params ClaimNextPendingParams) (Entry, bool, error)

@@ -224,23 +224,19 @@ func (s *FeedService) clearFeed(ctx context.Context, feedId string) error {
 	}
 
 	s.mu.RLock()
-	loaderBacked := s.storeLoader != nil
+	storeLoader := s.storeLoader
 	mutationCoordinator := s.mutationCoordinator
 	s.mu.RUnlock()
 
-	if loaderBacked {
+	if storeLoader != nil {
 		if mutationCoordinator == nil {
 			return fmt.Errorf("post mutation coordinator is required to clear loader-backed feed %s", feedId)
 		}
-		posts := fi.Feed.ListPost("")
-		for _, post := range posts {
-			if err := mutationCoordinator.DeletePost(ctx, DeletePostParams{
-				FeedID:  feedId,
-				FeedURI: types.FeedUri(fi.Definition.URI),
-				Post:    post,
-			}); err != nil {
-				return fmt.Errorf("delete persisted post during clear: %w", err)
-			}
+		if err := mutationCoordinator.ClearFeed(ctx, ClearFeedParams{
+			FeedID:  feedId,
+			FeedURI: types.FeedUri(fi.Definition.URI),
+		}); err != nil {
+			return fmt.Errorf("clear persisted posts during clear feed: %w", err)
 		}
 	}
 

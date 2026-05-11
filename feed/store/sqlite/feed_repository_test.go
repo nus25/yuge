@@ -183,3 +183,73 @@ func TestFeedRepositoryTrimOverflowKeepsNewestPosts(t *testing.T) {
 		t.Fatalf("remainingPosts[1].Uri = %s, want %s", remainingPosts[1].Uri, posts[1].Uri)
 	}
 }
+
+func TestFeedRepositoryDeleteAllPosts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, Options{
+		Path:         filepath.Join(t.TempDir(), "feed-delete-all.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewFeedRepository(db)
+	posts := []types.Post{
+		{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
+			Cid:       "cid-1",
+			IndexedAt: "2026-05-11T01:00:00Z",
+			Langs:     []string{"ja"},
+		},
+		{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri("at://did:plc:user2/app.bsky.feed.post/post2"),
+			Cid:       "cid-2",
+			IndexedAt: "2026-05-11T02:00:00Z",
+			Langs:     []string{"en"},
+		},
+	}
+	for _, post := range posts {
+		if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "feed-1", Post: post}); err != nil {
+			t.Fatalf("PutPost(%s) error = %v", post.Uri, err)
+		}
+	}
+	if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "feed-2", Post: posts[0]}); err != nil {
+		t.Fatalf("PutPost(feed-2) error = %v", err)
+	}
+
+	if err := repo.DeleteAllPosts(ctx, "feed-1"); err != nil {
+		t.Fatalf("DeleteAllPosts() error = %v", err)
+	}
+
+	remainingFeedOne, err := repo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: "feed-1"})
+	if err != nil {
+		t.Fatalf("ListPosts(feed-1) error = %v", err)
+	}
+	if len(remainingFeedOne) != 0 {
+		t.Fatalf("ListPosts(feed-1) len = %d, want 0", len(remainingFeedOne))
+	}
+
+	remainingFeedTwo, err := repo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: "feed-2"})
+	if err != nil {
+		t.Fatalf("ListPosts(feed-2) error = %v", err)
+	}
+	if len(remainingFeedTwo) != 1 {
+		t.Fatalf("ListPosts(feed-2) len = %d, want 1", len(remainingFeedTwo))
+	}
+}

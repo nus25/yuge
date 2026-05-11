@@ -19,10 +19,15 @@ import (
 
 type failingOutboxRepository struct {
 	enqueueErr error
+	clearErr   error
 }
 
 func (r *failingOutboxRepository) Enqueue(ctx context.Context, params projectionrepo.EnqueueParams) error {
 	return r.enqueueErr
+}
+
+func (r *failingOutboxRepository) ClearFeed(ctx context.Context, params projectionrepo.ClearFeedParams) error {
+	return r.clearErr
 }
 
 func (r *failingOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
@@ -452,5 +457,88 @@ func TestSQLiteFeedMutationTransactor_DeletePost_CommitsDeleteAndOutbox(t *testi
 	}
 	if entries[0].Operation != "delete" {
 		t.Fatalf("Operation = %s, want delete", entries[0].Operation)
+	}
+}
+
+func TestSQLiteFeedMutationTransactor_ClearFeed_CompactsPendingEntriesToSingleTrim(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "mutation-clear-success.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	feedRepo := storesqlite.NewFeedRepository(db)
+	for index := 0; index < 3; index++ {
+		post := types.Post{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri(fmt.Sprintf("at://did:plc:user%d/app.bsky.feed.post/post%d", index, index)),
+			Cid:       fmt.Sprintf("cid-%d", index),
+			IndexedAt: time.Date(2026, 5, 11, 8, index, 0, 0, time.UTC).Format(time.RFC3339Nano),
+			Langs:     []string{"ja"},
+		}
+		if err := feedRepo.PutPost(ctx, storerepo.PutPostParams{FeedID: "feed-1", Post: post}); err != nil {
+			t.Fatalf("PutPost() error = %v", err)
+		}
+	}
+
+	outboxRepo := projectionsqlite.NewOutboxRepository(db)
+	for index, operation := range []string{"add", "delete"} {
+		if err := outboxRepo.Enqueue(ctx, projectionrepo.EnqueueParams{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   operation,
+			MutationID:  fmt.Sprintf("mutation-%d", index),
+			SubjectKey:  fmt.Sprintf("feed-1:subject-%d", index),
+			OpKey:       fmt.Sprintf("mutation-%d:%s:feed-1", index, operation),
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample"}`,
+			Status:      "pending",
+		}); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+	}
+
+	coordinator := NewFeedMutationCoordinator(NewSQLiteFeedMutationTransactor(db, SQLiteFeedMutationTransactorOptions{}))
+	err = coordinator.ClearFeed(ctx, ClearFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		MutationID: "mutation-clear-1",
+	})
+	if err != nil {
+		t.Fatalf("ClearFeed() error = %v", err)
+	}
+
+	posts, err := feedRepo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: "feed-1"})
+	if err != nil {
+		t.Fatalf("ListPosts() error = %v", err)
+	}
+	if len(posts) != 0 {
+		t.Fatalf("ListPosts() len = %d, want 0", len(posts))
+	}
+
+	entries, err := outboxRepo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListByStatus() len = %d, want 1", len(entries))
+	}
+	if entries[0].Operation != "trim" {
+		t.Fatalf("Operation = %s, want trim", entries[0].Operation)
+	}
+	if entries[0].SubjectKey != "feed-1:trim" {
+		t.Fatalf("SubjectKey = %s, want feed-1:trim", entries[0].SubjectKey)
 	}
 }

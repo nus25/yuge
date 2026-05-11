@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
@@ -856,15 +857,17 @@ func TestFeedService_ClearFeed_RemovesPersistedPostsBeforeReload(t *testing.T) {
 	defer db.Close()
 
 	repo := storesqlite.NewFeedRepository(db)
-	seedPost := types.Post{
-		Feed:      types.FeedUri("at://did:plc:1234567890/app.bsky.feed.generator/test"),
-		Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
-		Cid:       "cid-1",
-		IndexedAt: "2026-05-11T10:00:00Z",
-		Langs:     []string{"ja"},
-	}
-	if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "new-feed", Post: seedPost}); err != nil {
-		t.Fatalf("PutPost() error = %v", err)
+	for index := 0; index < 30; index++ {
+		seedPost := types.Post{
+			Feed:      types.FeedUri("at://did:plc:1234567890/app.bsky.feed.generator/test"),
+			Uri:       types.PostUri(fmt.Sprintf("at://did:plc:user%d/app.bsky.feed.post/post%d", index, index)),
+			Cid:       fmt.Sprintf("cid-%d", index),
+			IndexedAt: time.Date(2026, 5, 11, 10, index, 0, 0, time.UTC).Format(time.RFC3339Nano),
+			Langs:     []string{"ja"},
+		}
+		if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "new-feed", Post: seedPost}); err != nil {
+			t.Fatalf("PutPost() error = %v", err)
+		}
 	}
 
 	provider, err := NewFileFeedDefinitionProvider(configDir)
@@ -894,8 +897,8 @@ func TestFeedService_ClearFeed_RemovesPersistedPostsBeforeReload(t *testing.T) {
 	if !exists {
 		t.Fatal("expected feed info to exist")
 	}
-	if got := len(info.Feed.ListPost("")); got != 1 {
-		t.Fatalf("initial ListPost() len = %d, want 1", got)
+	if got := len(info.Feed.ListPost("")); got != 24 {
+		t.Fatalf("initial ListPost() len = %d, want 24", got)
 	}
 
 	if err := service.ClearFeed(ctx, "new-feed"); err != nil {
@@ -927,6 +930,8 @@ func TestFeedService_ClearFeed_RemovesPersistedPostsBeforeReload(t *testing.T) {
 		t.Fatalf("listPendingOutboxOperations() error = %v", err)
 	} else if got := len(status); got != 1 {
 		t.Fatalf("pending outbox operation count = %d, want 1", got)
+	} else if status[0].Operation != "trim" {
+		t.Fatalf("pending outbox operation = %s, want trim", status[0].Operation)
 	}
 }
 

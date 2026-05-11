@@ -32,12 +32,16 @@ func (c *blockingDeleteCoordinator) AddPost(ctx context.Context, params AddPostP
 }
 
 func (c *blockingDeleteCoordinator) DeletePost(ctx context.Context, params DeletePostParams) error {
+	return c.inner.DeletePost(ctx, params)
+}
+
+func (c *blockingDeleteCoordinator) ClearFeed(ctx context.Context, params ClearFeedParams) error {
 	if !c.startedOnce {
 		c.startedOnce = true
 		close(c.deleteStarted)
 		<-c.deleteRelease
 	}
-	return c.inner.DeletePost(ctx, params)
+	return c.inner.ClearFeed(ctx, params)
 }
 
 type spyPostMutationCoordinator struct {
@@ -47,6 +51,9 @@ type spyPostMutationCoordinator struct {
 	deletePostErr    error
 	deletePostCalls  int
 	lastDeleteParams DeletePostParams
+	clearFeedErr     error
+	clearFeedCalls   int
+	lastClearParams  ClearFeedParams
 	sequence         *[]string
 }
 
@@ -66,6 +73,15 @@ func (s *spyPostMutationCoordinator) DeletePost(ctx context.Context, params Dele
 		*s.sequence = append(*s.sequence, "coordinator")
 	}
 	return s.deletePostErr
+}
+
+func (s *spyPostMutationCoordinator) ClearFeed(ctx context.Context, params ClearFeedParams) error {
+	s.clearFeedCalls++
+	s.lastClearParams = params
+	if s.sequence != nil {
+		*s.sequence = append(*s.sequence, "coordinator")
+	}
+	return s.clearFeedErr
 }
 
 type fakeHandlerFeed struct {

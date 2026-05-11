@@ -35,6 +35,9 @@ type fakeFeedRepository struct {
 	deletePostErr error
 	deleteCalls   int
 	lastDelete    storerepo.DeletePostParams
+	clearPostsErr error
+	clearCalls    int
+	lastClearFeed string
 	trimmedPosts  []types.Post
 	trimErr       error
 	trimCalls     int
@@ -57,6 +60,12 @@ func (r *fakeFeedRepository) DeletePost(ctx context.Context, params storerepo.De
 	return r.deletePostErr
 }
 
+func (r *fakeFeedRepository) DeleteAllPosts(ctx context.Context, feedID string) error {
+	r.clearCalls++
+	r.lastClearFeed = feedID
+	return r.clearPostsErr
+}
+
 func (r *fakeFeedRepository) TrimOverflow(ctx context.Context, params storerepo.TrimOverflowParams) ([]types.Post, error) {
 	r.trimCalls++
 	r.lastTrim = params
@@ -77,12 +86,21 @@ type fakeOutboxRepository struct {
 	enqueueErr   error
 	lastEnqueue  projectionrepo.EnqueueParams
 	enqueueCalls int
+	clearFeedErr error
+	lastClear    projectionrepo.ClearFeedParams
+	clearCalls   int
 }
 
 func (r *fakeOutboxRepository) Enqueue(ctx context.Context, params projectionrepo.EnqueueParams) error {
 	r.enqueueCalls++
 	r.lastEnqueue = params
 	return r.enqueueErr
+}
+
+func (r *fakeOutboxRepository) ClearFeed(ctx context.Context, params projectionrepo.ClearFeedParams) error {
+	r.clearCalls++
+	r.lastClear = params
+	return r.clearFeedErr
 }
 
 func (r *fakeOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
@@ -284,5 +302,51 @@ func TestFeedMutationCoordinator_DeletePost_CommitsAndBuildsContracts(t *testing
 	}
 	if transactor.outboxRepo.lastEnqueue.Target != "gyoka" {
 		t.Fatalf("Target = %s, want gyoka", transactor.outboxRepo.lastEnqueue.Target)
+	}
+}
+
+func TestFeedMutationCoordinator_ClearFeed_CommitsAndBuildsContracts(t *testing.T) {
+	t.Parallel()
+
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo:   &fakeFeedRepository{},
+		outboxRepo: &fakeOutboxRepository{},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+
+	err := coordinator.ClearFeed(context.Background(), ClearFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		MutationID: "mutation-clear-1",
+	})
+	if err != nil {
+		t.Fatalf("ClearFeed() error = %v", err)
+	}
+	if !transactor.committed {
+		t.Fatal("transaction was not committed on success")
+	}
+	if transactor.rolledBack {
+		t.Fatal("transaction rolled back on success")
+	}
+	if transactor.feedRepo.clearCalls != 1 {
+		t.Fatalf("DeleteAllPosts calls = %d, want 1", transactor.feedRepo.clearCalls)
+	}
+	if transactor.feedRepo.lastClearFeed != "feed-1" {
+		t.Fatalf("DeleteAllPosts feedID = %s, want feed-1", transactor.feedRepo.lastClearFeed)
+	}
+	if transactor.outboxRepo.clearCalls != 1 {
+		t.Fatalf("ClearFeed calls = %d, want 1", transactor.outboxRepo.clearCalls)
+	}
+	if transactor.outboxRepo.lastClear.Target != "gyoka" {
+		t.Fatalf("ClearFeed target = %s, want gyoka", transactor.outboxRepo.lastClear.Target)
+	}
+	if transactor.outboxRepo.lastClear.MutationID != "mutation-clear-1" {
+		t.Fatalf("ClearFeed mutationID = %s, want mutation-clear-1", transactor.outboxRepo.lastClear.MutationID)
+	}
+	if transactor.outboxRepo.lastClear.FeedURI != "at://did:plc:test/app.bsky.feed.generator/sample" {
+		t.Fatalf("ClearFeed feedURI = %s", transactor.outboxRepo.lastClear.FeedURI)
+	}
+	if transactor.outboxRepo.lastClear.Count != 0 {
+		t.Fatalf("ClearFeed count = %d, want 0", transactor.outboxRepo.lastClear.Count)
 	}
 }

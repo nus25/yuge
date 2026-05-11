@@ -188,10 +188,10 @@ func TestOutboxService_ProcessNextPending_NonRetryableErrorMovesEntryToDead(t *t
 		FeedID:      "feed-1",
 		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
 		Target:      "gyoka",
-		Operation:   "trim",
+		Operation:   "noop",
 		MutationID:  "m-1",
-		SubjectKey:  "feed-1:trim",
-		OpKey:       "m-1:trim:feed-1",
+		SubjectKey:  "feed-1:noop",
+		OpKey:       "m-1:noop:feed-1",
 		PayloadJSON: `{}`,
 		Status:      "pending",
 	}); err != nil {

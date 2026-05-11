@@ -115,6 +115,14 @@ func (r *FeedRepository) DeletePost(ctx context.Context, params storerepo.Delete
 	return nil
 }
 
+func (r *FeedRepository) DeleteAllPosts(ctx context.Context, feedID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM feed_posts WHERE feed_id = ?;`, feedID)
+	if err != nil {
+		return fmt.Errorf("delete all posts: %w", err)
+	}
+	return nil
+}
+
 func (r *FeedRepository) TrimOverflow(ctx context.Context, params storerepo.TrimOverflowParams) ([]types.Post, error) {
 	if params.TrimAt <= 0 {
 		return nil, nil

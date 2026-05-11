@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -107,6 +108,40 @@ func (r *OutboxRepository) Enqueue(ctx context.Context, params projectionrepo.En
 	`, params.FeedID, params.FeedURI, params.Target, params.Operation, params.MutationID, params.SubjectKey, params.OpKey, params.PayloadJSON, params.Status, now, now)
 	if err != nil {
 		return fmt.Errorf("enqueue outbox entry: %w", err)
+	}
+	return nil
+}
+
+func (r *OutboxRepository) ClearFeed(ctx context.Context, params projectionrepo.ClearFeedParams) error {
+	payloadJSON, err := json.Marshal(struct {
+		FeedURI string `json:"feedUri"`
+		Count   int    `json:"count"`
+	}{
+		FeedURI: params.FeedURI,
+		Count:   params.Count,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal clear feed payload: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `
+		DELETE FROM projection_outbox
+		WHERE feed_id = ? AND target = ? AND status = 'pending';
+	`, params.FeedID, params.Target); err != nil {
+		return fmt.Errorf("delete pending outbox entries for clear feed: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	subjectKey := fmt.Sprintf("%s:trim", params.FeedID)
+	opKey := fmt.Sprintf("%s:trim:%s:%d", params.MutationID, params.FeedID, params.Count)
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO projection_outbox (
+			feed_id, feed_uri, target, operation, mutation_id, subject_key, op_key, payload_json,
+			status, retry_count, next_retry_at, last_error, created_at, updated_at, completed_at
+		) VALUES (?, ?, ?, 'trim', ?, ?, ?, ?, 'pending', 0, NULL, '', ?, ?, NULL)
+		ON CONFLICT(target, op_key) DO NOTHING;
+	`, params.FeedID, params.FeedURI, params.Target, params.MutationID, subjectKey, opKey, string(payloadJSON), now, now)
+	if err != nil {
+		return fmt.Errorf("enqueue clear feed trim entry: %w", err)
 	}
 	return nil
 }

@@ -20,6 +20,7 @@ type GyokaMutator interface {
 	Add(params gyoka.PostParams) error
 	BatchAdd(params gyoka.BatchPostParams) error
 	Delete(params gyoka.DeleteParams) error
+	Trim(params gyoka.TrimParams) error
 }
 
 type GyokaProjector struct {
@@ -33,6 +34,7 @@ func NewGyokaProjector(mutator GyokaMutator) *GyokaProjector {
 type projectionPayload struct {
 	FeedURI types.FeedUri `json:"feedUri"`
 	Post    types.Post    `json:"post"`
+	Count   int           `json:"count,omitempty"`
 }
 
 func markNonRetryableProjection(err error) error {
@@ -89,6 +91,18 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 				return markNonRetryableProjection(fmt.Errorf("project delete entry: %w", err))
 			}
 			return fmt.Errorf("project delete entry: %w", err)
+		}
+		return nil
+	case "trim":
+		if err := p.mutator.Trim(gyoka.TrimParams{
+			FeedUri: payload.FeedURI,
+			Count:   payload.Count,
+		}); err != nil {
+			var nonRetryableErr *gyoka.NonRetryableError
+			if errors.As(err, &nonRetryableErr) {
+				return markNonRetryableProjection(fmt.Errorf("project trim entry: %w", err))
+			}
+			return fmt.Errorf("project trim entry: %w", err)
 		}
 		return nil
 	default:

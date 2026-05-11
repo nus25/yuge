@@ -856,6 +856,10 @@ func (noopOutboxRepository) Enqueue(ctx context.Context, params projectionrepo.E
 	return errors.New("unexpected Enqueue call")
 }
 
+func (noopOutboxRepository) ClearFeed(ctx context.Context, params projectionrepo.ClearFeedParams) error {
+	return errors.New("unexpected ClearFeed call")
+}
+
 func (noopOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
 	return nil, errors.New("unexpected ListByStatus call")
 }
@@ -1498,7 +1502,7 @@ func TestAPIHandler_ClearFeed_PreservesStateOnCoordinatorFailure(t *testing.T) {
 	}
 	defer db.Close()
 	fs.SetStoreLoader(newSQLitePostLoader(db))
-	fs.SetMutationCoordinator(&spyPostMutationCoordinator{deletePostErr: errors.New("boom")})
+	fs.SetMutationCoordinator(&spyPostMutationCoordinator{clearFeedErr: errors.New("boom")})
 
 	definition := FeedDefinition{
 		ID:         "test-feed",

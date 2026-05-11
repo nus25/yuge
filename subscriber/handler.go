@@ -20,6 +20,7 @@ import (
 type PostMutationCoordinator interface {
 	AddPost(ctx context.Context, params AddPostParams) error
 	DeletePost(ctx context.Context, params DeletePostParams) error
+	ClearFeed(ctx context.Context, params ClearFeedParams) error
 }
 
 type Handler struct {

@@ -336,6 +336,116 @@ func TestOutboxRepositoryMarkRetryableFailureRequeuesClaimedRow(t *testing.T) {
 	}
 }
 
+func TestOutboxRepositoryClearFeed_ReplacesPendingEntriesWithSingleTrim(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-clear.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	fixtures := []projectionrepo.EnqueueParams{
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-add",
+			SubjectKey:  "feed-1:subject-add",
+			OpKey:       "m-add:add:feed-1",
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "delete",
+			MutationID:  "m-delete",
+			SubjectKey:  "feed-1:subject-delete",
+			OpKey:       "m-delete:delete:feed-1",
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample"}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-2",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/other",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-other",
+			SubjectKey:  "feed-2:subject-add",
+			OpKey:       "m-other:add:feed-2",
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/other"}`,
+			Status:      "pending",
+		},
+	}
+	for _, fixture := range fixtures {
+		if err := repo.Enqueue(ctx, fixture); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+	}
+
+	if _, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"}); err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	} else if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+
+	if err := repo.ClearFeed(ctx, projectionrepo.ClearFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    "at://did:plc:test/app.bsky.feed.generator/sample",
+		Target:     "gyoka",
+		MutationID: "mutation-clear-1",
+		Count:      0,
+	}); err != nil {
+		t.Fatalf("ClearFeed() error = %v", err)
+	}
+
+	pendingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(pendingEntries) != 2 {
+		t.Fatalf("pending entries len = %d, want 2", len(pendingEntries))
+	}
+	if pendingEntries[0].FeedID != "feed-2" || pendingEntries[0].Operation != "add" {
+		t.Fatalf("pendingEntries[0] = %+v, want other feed add", pendingEntries[0])
+	}
+	if pendingEntries[1].FeedID != "feed-1" || pendingEntries[1].Operation != "trim" {
+		t.Fatalf("pendingEntries[1] = %+v, want feed-1 trim", pendingEntries[1])
+	}
+	if pendingEntries[1].SubjectKey != "feed-1:trim" {
+		t.Fatalf("trim SubjectKey = %s, want feed-1:trim", pendingEntries[1].SubjectKey)
+	}
+
+	processingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "processing", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() processing error = %v", err)
+	}
+	if len(processingEntries) != 1 {
+		t.Fatalf("processing entries len = %d, want 1", len(processingEntries))
+	}
+	if processingEntries[0].FeedID != "feed-1" {
+		t.Fatalf("processing FeedID = %s, want feed-1", processingEntries[0].FeedID)
+	}
+}
+
 func TestOutboxRepositoryMarkDeadMovesClaimedRowToDead(t *testing.T) {
 	t.Parallel()
 

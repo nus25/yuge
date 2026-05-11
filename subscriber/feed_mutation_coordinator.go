@@ -39,6 +39,12 @@ type DeletePostParams struct {
 	MutationID string
 }
 
+type ClearFeedParams struct {
+	FeedID     string
+	FeedURI    types.FeedUri
+	MutationID string
+}
+
 func NewFeedMutationCoordinator(transactor FeedMutationTransactor) *FeedMutationCoordinator {
 	return &FeedMutationCoordinator{transactor: transactor}
 }
@@ -173,6 +179,32 @@ func (c *FeedMutationCoordinator) DeletePost(ctx context.Context, params DeleteP
 			OpKey:       opKey,
 			PayloadJSON: string(payloadJSON),
 			Status:      "pending",
+		}); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (c *FeedMutationCoordinator) ClearFeed(ctx context.Context, params ClearFeedParams) error {
+	if c == nil || c.transactor == nil {
+		return fmt.Errorf("feed mutation transactor is required")
+	}
+	mutationID := params.MutationID
+	if mutationID == "" {
+		mutationID = fmt.Sprintf("%d", time.Now().UTC().UnixNano())
+	}
+
+	return c.transactor.WithinTx(ctx, func(ctx context.Context, feedRepo storerepo.FeedRepository, outboxRepo projectionrepo.OutboxRepository) error {
+		if err := feedRepo.DeleteAllPosts(ctx, params.FeedID); err != nil {
+			return err
+		}
+		if err := outboxRepo.ClearFeed(ctx, projectionrepo.ClearFeedParams{
+			FeedID:     params.FeedID,
+			FeedURI:    string(params.FeedURI),
+			Target:     "gyoka",
+			MutationID: mutationID,
+			Count:      0,
 		}); err != nil {
 			return err
 		}
