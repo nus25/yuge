@@ -207,23 +207,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			r.POST("/api/admin/projection/ops/:id/retry", feedAPI.RetryProjectionOp)
 			r.DELETE("/api/admin/projection/ops/:id", feedAPI.DeleteProjectionOp)
 			r.POST("/api/admin/projection/ops/purge-completed", feedAPI.PurgeCompletedProjectionOps)
-			r.GET("/api/feed", feedAPI.ListFeed)
-			r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed) // POSTからPUTに変更
-			r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).
-				GET("", feedAPI.GetFeedInfo).
-				DELETE("", feedAPI.UnregisterFeed).
-				GET("/status", feedAPI.GetFeedStatus).
-				PATCH("/status", feedAPI.UpdateFeedStatus).
-				POST("/clear", feedAPI.ClearFeed).
-				POST("/reload", feedAPI.ReloadFeed).
-				GET("/config", feedAPI.GetConfig).
-				GET("/post", feedAPI.GetAllPosts).
-				GET("/post/:did", feedAPI.GetPostsByDid).
-				GET("/post/:did/:rkey", feedAPI.GetPostByRkey).
-				POST("/post/:did/:rkey", feedAPI.AddPost).
-				DELETE("/post/:did", feedAPI.DeletePostByDid).
-				DELETE("/post/:did/:rkey", feedAPI.DeletePost).
-				POST("/logicblock/:logicblockname/:command", feedAPI.ProcessLogicBlockCommand)
+			registerFeedAPIRoutes(r, feedAPI)
 
 			return r
 		}(),
@@ -307,4 +291,25 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 
 	log.Info("shut down successfully")
 	return nil
+}
+
+func registerFeedAPIRoutes(r gin.IRouter, feedAPI *FeedApiHandler) {
+	r.GET("/api/feed", feedAPI.ListFeed)
+	r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed)
+	r.POST("/api/feed/:feedid", feedAPI.RegisterFeed)
+	r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).
+		GET("", feedAPI.GetFeedInfo).
+		DELETE("", feedAPI.UnregisterFeed).
+		GET("/status", feedAPI.GetFeedStatus).
+		PATCH("/status", feedAPI.UpdateFeedStatus).
+		POST("/clear", feedAPI.ClearFeed).
+		POST("/reload", feedAPI.ReloadFeed).
+		GET("/config", feedAPI.GetConfig).
+		GET("/post", feedAPI.GetAllPosts).
+		GET("/post/:did", feedAPI.GetPostsByDid).
+		GET("/post/:did/:rkey", feedAPI.GetPostByRkey).
+		POST("/post/:did/:rkey", feedAPI.AddPost).
+		DELETE("/post/:did", feedAPI.DeletePostByDid).
+		DELETE("/post/:did/:rkey", feedAPI.DeletePost).
+		POST("/logicblock/:logicblockname/:command", feedAPI.ProcessLogicBlockCommand)
 }
