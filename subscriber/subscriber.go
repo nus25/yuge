@@ -88,6 +88,23 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)
 	}
+	if cctx.Bool("import-legacy-store-json") {
+		if fdp == nil {
+			return fmt.Errorf("legacy snapshot import requires feed definition provider")
+		}
+		importResult, err := importLegacyFileSnapshots(ctx, logger, fdp, cctx.String("data-directory-path"), sqlitePersistence.mutationDB, importLegacyFileSnapshotsOptions{
+			EnqueueProjection: cctx.Bool("import-legacy-store-enqueue-projection"),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to import legacy store snapshots: %w", err)
+		}
+		logger.Info("legacy snapshot import completed",
+			"feeds", importResult.ImportedFeeds,
+			"posts", importResult.ImportedPosts,
+			"projectionOps", importResult.EnqueuedProjectionOps,
+			"enqueueProjection", cctx.Bool("import-legacy-store-enqueue-projection"),
+		)
+	}
 	fs.SetStoreLoader(sqlitePersistence.postLoader)
 	fs.SetMutationCoordinator(sqlitePersistence.mutationCoordinator)
 	defer func() {

@@ -89,6 +89,18 @@ func run(args []string) {
 						Value:   "./data",
 						EnvVars: []string{"DATA_DIR"},
 					},
+					&cli.BoolFlag{
+						Name:    "import-legacy-store-json",
+						Usage:   "import legacy FileEditor store.json snapshots into SQLite before startup",
+						Value:   false,
+						EnvVars: []string{"IMPORT_LEGACY_STORE_JSON"},
+					},
+					&cli.BoolFlag{
+						Name:    "import-legacy-store-enqueue-projection",
+						Usage:   "enqueue imported legacy posts into projection_outbox for replay during startup",
+						Value:   false,
+						EnvVars: []string{"IMPORT_LEGACY_STORE_ENQUEUE_PROJECTION"},
+					},
 					&cli.StringFlag{
 						Name:    "api-listen-addr",
 						Usage:   "addr to serve prometheus metrics on",
