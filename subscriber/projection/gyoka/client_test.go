@@ -104,8 +104,11 @@ func TestGyokaEditor(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			go client.Open(ctx)
-			time.Sleep(100 * time.Millisecond)
+			if tt.endpoint != "" {
+				if err := client.Open(ctx); err != nil {
+					t.Fatalf("failed to open client: %v", err)
+				}
+			}
 
 			err = client.Add(PostParams{
 				FeedUri:   types.FeedUri(tt.feed),
@@ -121,7 +124,6 @@ func TestGyokaEditor(t *testing.T) {
 				}
 			}
 
-			time.Sleep(100 * time.Millisecond)
 		})
 
 		t.Run("Delete_"+tt.name, func(t *testing.T) {
@@ -179,8 +181,11 @@ func TestGyokaEditor(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			go client.Open(ctx)
-			time.Sleep(100 * time.Millisecond)
+			if tt.endpoint != "" {
+				if err := client.Open(ctx); err != nil {
+					t.Fatalf("failed to open client: %v", err)
+				}
+			}
 
 			err = client.Delete(DeleteParams{
 				FeedUri: types.FeedUri(tt.feed),
@@ -191,8 +196,47 @@ func TestGyokaEditor(t *testing.T) {
 				t.Errorf("failed to delete post: %v", err)
 			}
 
-			time.Sleep(100 * time.Millisecond)
 		})
+	}
+}
+
+func TestGyokaEditor_AddDoesNotRequireOpen(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.Default()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/feed/addPost" {
+			t.Fatalf("path = %s, want /api/feed/addPost", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"message":"success"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewGyokaEditor(server.URL, logger)
+	if err != nil {
+		t.Fatalf("failed to create editor: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Add(PostParams{
+			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
+			Did:       "did:plc:test",
+			Rkey:      "post1",
+			Cid:       "cid-1",
+			IndexedAt: time.Now(),
+			Langs:     []string{"ja"},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Add() blocked without Open()")
 	}
 }
 
@@ -238,8 +282,6 @@ func TestRetryFunctionality(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		err = client.Add(PostParams{
 			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
 			Did:       "did:plc:test",
@@ -290,8 +332,6 @@ func TestRetryFunctionality(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		err = client.Add(PostParams{
 			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
 			Did:       "did:plc:test",
@@ -742,8 +782,6 @@ func TestGyokaEditorErrorMessages(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		err = client.Add(PostParams{
 			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
 			Did:       "did:plc:test",
@@ -790,8 +828,6 @@ func TestGyokaEditorErrorMessages(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		err = client.Add(PostParams{
 			FeedUri:   types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test"),
 			Did:       "did:plc:test",
@@ -967,8 +1003,6 @@ func TestBatchAdd(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 
 		for i := 0; i < 3; i++ {
@@ -1053,8 +1087,6 @@ func TestBatchAdd(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 		entries := []PostParams{
 			{
@@ -1186,8 +1218,6 @@ func TestBatchAdd(t *testing.T) {
 		if err := client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
-
 		entries := make([]PostParams, 30)
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 		for i := 0; i < 30; i++ {

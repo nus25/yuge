@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"sync"
 	"time"
 
 	client "github.com/nus25/gyoka-client/go"
@@ -46,20 +45,12 @@ type feedRequest struct {
 	DeleteParams      DeleteParams
 	DeleteByDidParams DeleteByDidParams
 	TrimParams        TrimParams
-	errCh             chan error
 }
 
 type GyokaEditor struct {
-	client    *client.ClientWithResponses
-	option    *ClientOption
-	logger    *slog.Logger
-	requestCh chan *feedRequest
-	done      chan struct{}
-	mu        sync.RWMutex
-	closeOnce sync.Once
-	closeMu   sync.RWMutex
-	requestMu sync.RWMutex
-	closing   bool
+	client *client.ClientWithResponses
+	option *ClientOption
+	logger *slog.Logger
 }
 
 type customHeaderTransport struct {
@@ -131,13 +122,9 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 	if url == "" {
 		logger.Info("feed editor url is not set. client will skip syncing")
 		return &GyokaEditor{
-			client:    nil,
-			option:    nil,
-			logger:    logger,
-			requestCh: make(chan *feedRequest, 100),
-			done:      make(chan struct{}),
-			mu:        sync.RWMutex{},
-			requestMu: sync.RWMutex{},
+			client: nil,
+			option: nil,
+			logger: logger,
 		}, nil
 	}
 
@@ -188,13 +175,9 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 	}
 
 	return &GyokaEditor{
-		client:    c,
-		option:    opt,
-		logger:    logger,
-		requestCh: make(chan *feedRequest, 100),
-		done:      make(chan struct{}),
-		mu:        sync.RWMutex{},
-		requestMu: sync.RWMutex{},
+		client: c,
+		option: opt,
+		logger: logger,
 	}, nil
 }
 
@@ -208,20 +191,13 @@ func (e *GyokaEditor) Open(ctx context.Context) error {
 		if attempt > 0 {
 			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
 			e.logger.Info("retrying ping request", "attempt", attempt, "delay", delay)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
+			if err := waitForRetry(ctx, delay); err != nil {
+				return err
 			}
 		}
 
 		err := e.executePingRequest(ctx)
 		if err == nil {
-			go func() {
-				if err := e.startWorker(); err != nil {
-					e.logger.Error("worker error", "error", err)
-				}
-			}()
 			return nil
 		}
 
@@ -238,6 +214,15 @@ func (e *GyokaEditor) Open(ctx context.Context) error {
 
 	e.logger.Error("ping request failed after all retries", "attempts", e.option.maxRetries+1, "error", lastErr)
 	return lastErr
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
 }
 
 func (e *GyokaEditor) executePingRequest(ctx context.Context) error {
@@ -272,55 +257,6 @@ func (e *GyokaEditor) executePingRequest(ctx context.Context) error {
 
 	return nil
 }
-
-func (e *GyokaEditor) startWorker() error {
-	if e.client == nil {
-		return nil
-	}
-	e.logger.Info("starting worker")
-	defer func() {
-		e.closeMu.Lock()
-		e.closing = true
-		e.closeMu.Unlock()
-
-		e.logger.Info("draining remaining requests in channel")
-		for {
-			select {
-			case req, ok := <-e.requestCh:
-				if !ok {
-					break
-				}
-				err := e.processRequest(req)
-				req.errCh <- err
-			default:
-				e.requestMu.Lock()
-				pending := len(e.requestCh)
-				e.requestMu.Unlock()
-
-				if pending == 0 {
-					e.logger.Info("requests draining completed.")
-					e.closeOnce.Do(func() {
-						close(e.done)
-						close(e.requestCh)
-					})
-					e.logger.Info("worker shutdown completed")
-					return
-				}
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-e.done:
-			return nil
-		case req := <-e.requestCh:
-			err := e.processRequest(req)
-			req.errCh <- err
-		}
-	}
-}
-
 func (e *GyokaEditor) processRequest(req *feedRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -330,7 +266,9 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 		if attempt > 0 {
 			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
 			e.logger.Info("retrying request", "operation", req.operation, "attempt", attempt, "delay", delay)
-			time.Sleep(delay)
+			if err := waitForRetry(ctx, delay); err != nil {
+				return err
+			}
 		}
 
 		err := e.executeRequest(ctx, req)
@@ -508,40 +446,36 @@ func (e *GyokaEditor) Load(ctx context.Context, params LoadParams) ([]types.Post
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
-		e.mu.RLock()
-		defer e.mu.RUnlock()
+	}
 
-		var lastErr error
-		for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
-			if attempt > 0 {
-				delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
-				e.logger.Info("retrying load request", "attempt", attempt, "delay", delay)
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(delay):
-				}
-			}
-
-			posts, err := e.executeLoadRequest(ctx, params)
-			if err == nil {
-				return posts, nil
-			}
-
-			lastErr = err
-			if isNonRetryableError(err) {
-				e.logger.Error("load request failed with non-retryable error", "error", err)
+	var lastErr error
+	for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
+			e.logger.Info("retrying load request", "attempt", attempt, "delay", delay)
+			if err := waitForRetry(ctx, delay); err != nil {
 				return nil, err
-			}
-
-			if attempt < e.option.maxRetries {
-				e.logger.Warn("load request failed, will retry", "attempt", attempt, "error", err)
 			}
 		}
 
-		e.logger.Error("load request failed after all retries", "attempts", e.option.maxRetries+1, "error", lastErr)
-		return nil, lastErr
+		posts, err := e.executeLoadRequest(ctx, params)
+		if err == nil {
+			return posts, nil
+		}
+
+		lastErr = err
+		if isNonRetryableError(err) {
+			e.logger.Error("load request failed with non-retryable error", "error", err)
+			return nil, err
+		}
+
+		if attempt < e.option.maxRetries {
+			e.logger.Warn("load request failed, will retry", "attempt", attempt, "error", err)
+		}
 	}
+
+	e.logger.Error("load request failed after all retries", "attempts", e.option.maxRetries+1, "error", lastErr)
+	return nil, lastErr
 }
 
 func (e *GyokaEditor) executeLoadRequest(ctx context.Context, params LoadParams) ([]types.Post, error) {
@@ -597,13 +531,10 @@ func (e *GyokaEditor) Add(params PostParams) error {
 		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	errCh := make(chan error, 1)
-	e.requestCh <- &feedRequest{
+	return e.processRequest(&feedRequest{
 		operation: "add",
 		AddParams: params,
-		errCh:     errCh,
-	}
-	return <-errCh
+	})
 }
 
 func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
@@ -644,14 +575,12 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 			"total_batches", totalBatches,
 			"batch_size", len(batchEntries))
 
-		errCh := make(chan error, 1)
-		e.requestCh <- &feedRequest{
+		err := e.processRequest(&feedRequest{
 			operation:      "batchAdd",
 			BatchAddParams: BatchPostParams{Entries: batchEntries},
-			errCh:          errCh,
-		}
+		})
 
-		if err := <-errCh; err != nil {
+		if err != nil {
 			failureCount += len(batchEntries)
 			e.logger.Error("batch request failed",
 				"batch", batchNum,
@@ -694,13 +623,10 @@ func (e *GyokaEditor) Delete(params DeleteParams) error {
 		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	errCh := make(chan error, 1)
-	e.requestCh <- &feedRequest{
+	return e.processRequest(&feedRequest{
 		operation:    "delete",
 		DeleteParams: params,
-		errCh:        errCh,
-	}
-	return <-errCh
+	})
 }
 
 func (e *GyokaEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
@@ -712,15 +638,10 @@ func (e *GyokaEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
 		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-
-	errCh := make(chan error, 1)
-	e.requestCh <- &feedRequest{
+	return e.processRequest(&feedRequest{
 		operation:         "deleteByDid",
 		DeleteByDidParams: DeleteByDidParams{FeedUri: feedUri, Did: did},
-		errCh:             errCh,
-	}
-
-	return <-errCh
+	})
 }
 
 func (e *GyokaEditor) Trim(params TrimParams) error {
@@ -738,14 +659,10 @@ func (e *GyokaEditor) Trim(params TrimParams) error {
 		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-
-	errCh := make(chan error, 1)
-	e.requestCh <- &feedRequest{
+	return e.processRequest(&feedRequest{
 		operation:  "trim",
 		TrimParams: params,
-		errCh:      errCh,
-	}
-	return <-errCh
+	})
 }
 
 func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
@@ -753,15 +670,6 @@ func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
 }
 
 func (e *GyokaEditor) Close(ctx context.Context) error {
-	if e.client != nil {
-		e.closeMu.Lock()
-		if !e.closing {
-			e.closing = true
-			e.closeOnce.Do(func() {
-				close(e.done)
-			})
-		}
-		e.closeMu.Unlock()
-	}
+	_ = ctx
 	return nil
 }
