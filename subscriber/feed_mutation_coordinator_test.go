@@ -89,6 +89,22 @@ func (r *fakeOutboxRepository) ListByStatus(ctx context.Context, params projecti
 	return nil, nil
 }
 
+func (r *fakeOutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
+	return projectionrepo.Entry{}, false, nil
+}
+
+func (r *fakeOutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
+	return nil
+}
+
+func (r *fakeOutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
+	return nil
+}
+
+func (r *fakeOutboxRepository) MarkDead(ctx context.Context, params projectionrepo.MarkDeadParams) error {
+	return nil
+}
+
 func TestFeedMutationCoordinator_AddPost_RollsBackWhenOutboxEnqueueFails(t *testing.T) {
 	t.Parallel()
 

@@ -29,6 +29,22 @@ func (r *failingOutboxRepository) ListByStatus(ctx context.Context, params proje
 	return nil, nil
 }
 
+func (r *failingOutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
+	return projectionrepo.Entry{}, false, nil
+}
+
+func (r *failingOutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
+	return nil
+}
+
+func (r *failingOutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
+	return nil
+}
+
+func (r *failingOutboxRepository) MarkDead(ctx context.Context, params projectionrepo.MarkDeadParams) error {
+	return nil
+}
+
 func openMutationTestDB(t *testing.T) context.Context {
 	t.Helper()
 	return context.Background()

@@ -15,12 +15,41 @@ type dbtx interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 type OutboxRepository struct {
 	db dbtx
 }
 
 func NewOutboxRepository(db dbtx) *OutboxRepository {
 	return &OutboxRepository{db: db}
+}
+
+func scanOutboxEntry(scanner interface{ Scan(dest ...any) error }) (projectionrepo.Entry, error) {
+	var entry projectionrepo.Entry
+	if err := scanner.Scan(
+		&entry.ID,
+		&entry.FeedID,
+		&entry.FeedURI,
+		&entry.Target,
+		&entry.Operation,
+		&entry.MutationID,
+		&entry.SubjectKey,
+		&entry.OpKey,
+		&entry.PayloadJSON,
+		&entry.Status,
+		&entry.RetryCount,
+		&entry.NextRetryAt,
+		&entry.LastError,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+		&entry.CompletedAt,
+	); err != nil {
+		return projectionrepo.Entry{}, err
+	}
+	return entry, nil
 }
 
 func (r *OutboxRepository) Enqueue(ctx context.Context, params projectionrepo.EnqueueParams) error {
@@ -60,25 +89,8 @@ func (r *OutboxRepository) ListByStatus(ctx context.Context, params projectionre
 
 	entries := make([]projectionrepo.Entry, 0)
 	for rows.Next() {
-		var entry projectionrepo.Entry
-		if err := rows.Scan(
-			&entry.ID,
-			&entry.FeedID,
-			&entry.FeedURI,
-			&entry.Target,
-			&entry.Operation,
-			&entry.MutationID,
-			&entry.SubjectKey,
-			&entry.OpKey,
-			&entry.PayloadJSON,
-			&entry.Status,
-			&entry.RetryCount,
-			&entry.NextRetryAt,
-			&entry.LastError,
-			&entry.CreatedAt,
-			&entry.UpdatedAt,
-			&entry.CompletedAt,
-		); err != nil {
+		entry, err := scanOutboxEntry(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan outbox row: %w", err)
 		}
 		entries = append(entries, entry)
@@ -87,4 +99,130 @@ func (r *OutboxRepository) ListByStatus(ctx context.Context, params projectionre
 		return nil, fmt.Errorf("iterate outbox rows: %w", err)
 	}
 	return entries, nil
+}
+
+func (r *OutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
+	beginner, ok := r.db.(txBeginner)
+	if !ok {
+		return projectionrepo.Entry{}, false, fmt.Errorf("claim next pending requires transaction-capable database")
+	}
+	tx, err := beginner.BeginTx(ctx, nil)
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("begin outbox claim transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var entryID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM projection_outbox
+		WHERE target = ? AND status = 'pending' AND (next_retry_at IS NULL OR next_retry_at = '' OR next_retry_at <= ?)
+		ORDER BY id ASC
+		LIMIT 1;
+	`, params.Target, now).Scan(&entryID)
+	if err == sql.ErrNoRows {
+		return projectionrepo.Entry{}, false, nil
+	}
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("select pending outbox entry: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE projection_outbox
+		SET status = 'processing', updated_at = ?, completed_at = NULL
+		WHERE id = ? AND status = 'pending';
+	`, now, entryID)
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("claim pending outbox entry: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("read claim rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return projectionrepo.Entry{}, false, nil
+	}
+
+	entry, err := scanOutboxEntry(tx.QueryRowContext(ctx, `
+		SELECT id, feed_id, feed_uri, target, operation, mutation_id, subject_key, op_key,
+			payload_json, status, retry_count, COALESCE(next_retry_at, ''), COALESCE(last_error, ''),
+			created_at, updated_at, COALESCE(completed_at, '')
+		FROM projection_outbox
+		WHERE id = ?;
+	`, entryID))
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("load claimed outbox entry: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("commit outbox claim transaction: %w", err)
+	}
+	committed = true
+	return entry, true, nil
+}
+
+func (r *OutboxRepository) MarkCompleted(ctx context.Context, params projectionrepo.MarkCompletedParams) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE projection_outbox
+		SET status = 'completed', updated_at = ?, completed_at = ?, last_error = ''
+		WHERE id = ? AND status = 'processing';
+	`, now, now, params.ID)
+	if err != nil {
+		return fmt.Errorf("mark outbox entry completed: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read completed rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("mark outbox entry completed: no processing row for id %d", params.ID)
+	}
+	return nil
+}
+
+func (r *OutboxRepository) MarkRetryableFailure(ctx context.Context, params projectionrepo.MarkRetryableFailureParams) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nextRetryAt := params.NextRetryAt.UTC().Format(time.RFC3339Nano)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE projection_outbox
+		SET status = 'pending', retry_count = retry_count + 1, next_retry_at = ?, last_error = ?, updated_at = ?, completed_at = NULL
+		WHERE id = ? AND status = 'processing';
+	`, nextRetryAt, params.LastError, now, params.ID)
+	if err != nil {
+		return fmt.Errorf("mark outbox entry retryable failure: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read retryable failure rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("mark outbox entry retryable failure: no processing row for id %d", params.ID)
+	}
+	return nil
+}
+
+func (r *OutboxRepository) MarkDead(ctx context.Context, params projectionrepo.MarkDeadParams) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE projection_outbox
+		SET status = 'dead', retry_count = retry_count + 1, last_error = ?, updated_at = ?, completed_at = NULL
+		WHERE id = ? AND status = 'processing';
+	`, params.LastError, now, params.ID)
+	if err != nil {
+		return fmt.Errorf("mark outbox entry dead: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read dead rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("mark outbox entry dead: no processing row for id %d", params.ID)
+	}
+	return nil
 }

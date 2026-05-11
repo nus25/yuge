@@ -68,3 +68,233 @@ func TestOutboxRepositoryEnqueueAndListByStatus(t *testing.T) {
 		t.Fatalf("ListByStatus()[0].OpKey = %s, want %s", entries[0].OpKey, params.OpKey)
 	}
 }
+
+func TestOutboxRepositoryClaimAndCompleteSinglePendingRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-claim.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-1",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-1",
+		SubjectKey:  "feed-1:at://did:plc:user1/app.bsky.feed.post/post1",
+		OpKey:       "m-1:add:feed-1:at://did:plc:user1/app.bsky.feed.post/post1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	if claimed.Status != "processing" {
+		t.Fatalf("claimed.Status = %s, want processing", claimed.Status)
+	}
+
+	pendingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() pending error = %v", err)
+	}
+	if len(pendingEntries) != 0 {
+		t.Fatalf("pending entries len = %d, want 0", len(pendingEntries))
+	}
+
+	if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: claimed.ID}); err != nil {
+		t.Fatalf("MarkCompleted() error = %v", err)
+	}
+
+	completedEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() completed error = %v", err)
+	}
+	if len(completedEntries) != 1 {
+		t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
+	}
+	if completedEntries[0].CompletedAt == "" {
+		t.Fatal("completed entry CompletedAt is empty")
+	}
+
+	_, ok, err = repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() second error = %v", err)
+	}
+	if ok {
+		t.Fatal("ClaimNextPending() second ok = true, want false")
+	}
+}
+
+func TestOutboxRepositoryMarkRetryableFailureRequeuesClaimedRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-retryable.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-1",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-1",
+		SubjectKey:  "feed-1:at://did:plc:user1/app.bsky.feed.post/post1",
+		OpKey:       "m-1:add:feed-1:at://did:plc:user1/app.bsky.feed.post/post1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+
+	nextRetryAt := time.Now().UTC().Add(3 * time.Second)
+	if err := repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
+		ID:          claimed.ID,
+		LastError:   "temporary failure",
+		NextRetryAt: nextRetryAt,
+	}); err != nil {
+		t.Fatalf("MarkRetryableFailure() error = %v", err)
+	}
+
+	processingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "processing", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() processing error = %v", err)
+	}
+	if len(processingEntries) != 0 {
+		t.Fatalf("processing entries len = %d, want 0", len(processingEntries))
+	}
+
+	pendingEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "pending", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() pending error = %v", err)
+	}
+	if len(pendingEntries) != 1 {
+		t.Fatalf("pending entries len = %d, want 1", len(pendingEntries))
+	}
+	if pendingEntries[0].RetryCount != 1 {
+		t.Fatalf("pending RetryCount = %d, want 1", pendingEntries[0].RetryCount)
+	}
+	if pendingEntries[0].LastError != "temporary failure" {
+		t.Fatalf("pending LastError = %q, want temporary failure", pendingEntries[0].LastError)
+	}
+	if pendingEntries[0].NextRetryAt == "" {
+		t.Fatal("pending NextRetryAt is empty")
+	}
+}
+
+func TestOutboxRepositoryMarkDeadMovesClaimedRowToDead(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-dead.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-1",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+		Target:      "gyoka",
+		Operation:   "trim",
+		MutationID:  "m-1",
+		SubjectKey:  "feed-1:trim",
+		OpKey:       "m-1:trim:feed-1",
+		PayloadJSON: `{}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+
+	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: claimed.ID, LastError: "unsupported operation"}); err != nil {
+		t.Fatalf("MarkDead() error = %v", err)
+	}
+
+	deadEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "dead", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() dead error = %v", err)
+	}
+	if len(deadEntries) != 1 {
+		t.Fatalf("dead entries len = %d, want 1", len(deadEntries))
+	}
+	if deadEntries[0].RetryCount != 1 {
+		t.Fatalf("dead RetryCount = %d, want 1", deadEntries[0].RetryCount)
+	}
+	if deadEntries[0].LastError != "unsupported operation" {
+		t.Fatalf("dead LastError = %q, want unsupported operation", deadEntries[0].LastError)
+	}
+	if deadEntries[0].CompletedAt != "" {
+		t.Fatalf("dead CompletedAt = %q, want empty", deadEntries[0].CompletedAt)
+	}
+}

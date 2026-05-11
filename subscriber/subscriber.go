@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nus25/yuge/feed/store/editor"
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
 	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
@@ -75,6 +76,13 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}
+	var projectionClientOptions []editor.ClientOptionFunc
+	if cfID, cfSecret := cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret"); cfID != "" && cfSecret != "" {
+		projectionClientOptions = append(projectionClientOptions, editor.WithCfToken(cfID, cfSecret))
+	}
+	if apiKey := cctx.String("gyoka-api-key"); apiKey != "" {
+		projectionClientOptions = append(projectionClientOptions, editor.WithApiKey(apiKey))
+	}
 	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
 	if err != nil {
 		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)
@@ -86,6 +94,23 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			logger.Error("failed to close sqlite runtime persistence", "error", err)
 		}
 	}()
+	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, cctx.String("feed-editor-endpoint"), gyokaProjectionRuntimeOptions{
+		clientOptions: projectionClientOptions,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start gyoka projection runtime: %w", err)
+	}
+	if projectionRuntime == nil {
+		logger.Info("gyoka projection runtime disabled: no feed editor endpoint configured")
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := projectionRuntime.Close(shutdownCtx); err != nil {
+				logger.Error("failed to close gyoka projection runtime", "error", err)
+			}
+		}()
+	}
 	logger.Info("loading feeds")
 	if err := fs.LoadFeeds(context.Background()); err != nil {
 		logger.Error("failed to load some feed", "error", err)

@@ -51,6 +51,22 @@ var (
 		},
 		[]string{"feed_id", "block_name"},
 	)
+	projectionOutboxCompleted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "projection_outbox_completed_total",
+		Help: "The total number of outbox entries completed by projector target",
+	}, []string{"target"})
+	projectionOutboxRetried = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "projection_outbox_retried_total",
+		Help: "The total number of outbox entries requeued after retryable projector errors",
+	}, []string{"target"})
+	projectionOutboxDead = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "projection_outbox_dead_total",
+		Help: "The total number of outbox entries moved to dead after non-retryable projector errors",
+	}, []string{"target"})
+	projectionOutboxErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "projection_outbox_errors_total",
+		Help: "The total number of projector processing errors by target and classification",
+	}, []string{"target", "classification"})
 )
 
 func updateMetrics(f feed.Feed) {
