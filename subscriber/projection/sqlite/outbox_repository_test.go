@@ -527,3 +527,115 @@ func TestOutboxRepositoryPurgeCompletedDeletesLimitedRows(t *testing.T) {
 		t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
 	}
 }
+
+func TestOutboxRepositoryCountByStatus(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-counts.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	target := "gyoka-counts"
+	entries := []projectionrepo.EnqueueParams{
+		{
+			FeedID:      "feed-pending",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/pending",
+			Target:      target,
+			Operation:   "add",
+			MutationID:  "m-pending",
+			SubjectKey:  "subject-pending",
+			OpKey:       "op-pending",
+			PayloadJSON: `{}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-completed",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/completed",
+			Target:      target,
+			Operation:   "add",
+			MutationID:  "m-completed",
+			SubjectKey:  "subject-completed",
+			OpKey:       "op-completed",
+			PayloadJSON: `{}`,
+			Status:      "pending",
+		},
+		{
+			FeedID:      "feed-dead",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/dead",
+			Target:      target,
+			Operation:   "delete",
+			MutationID:  "m-dead",
+			SubjectKey:  "subject-dead",
+			OpKey:       "op-dead",
+			PayloadJSON: `{}`,
+			Status:      "pending",
+		},
+	}
+	for _, entry := range entries {
+		if err := repo.Enqueue(ctx, entry); err != nil {
+			t.Fatalf("Enqueue(%s) error = %v", entry.OpKey, err)
+		}
+	}
+
+	completedEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() first error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() first ok = false, want true")
+	}
+	if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: completedEntry.ID}); err != nil {
+		t.Fatalf("MarkCompleted() error = %v", err)
+	}
+
+	deadEntry, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: target})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() second error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() second ok = false, want true")
+	}
+	if err := repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: deadEntry.ID, LastError: "boom"}); err != nil {
+		t.Fatalf("MarkDead() error = %v", err)
+	}
+
+	counts, err := repo.CountByStatus(ctx, projectionrepo.CountByStatusParams{Target: target})
+	if err != nil {
+		t.Fatalf("CountByStatus() error = %v", err)
+	}
+
+	countsByStatus := make(map[string]int64, len(counts))
+	for _, count := range counts {
+		countsByStatus[count.Status] = count.Count
+	}
+
+	if got := countsByStatus["pending"]; got != 1 {
+		t.Fatalf("pending count = %d, want 1", got)
+	}
+	if got := countsByStatus["completed"]; got != 1 {
+		t.Fatalf("completed count = %d, want 1", got)
+	}
+	if got := countsByStatus["dead"]; got != 1 {
+		t.Fatalf("dead count = %d, want 1", got)
+	}
+	if got := countsByStatus["processing"]; got != 0 {
+		t.Fatalf("processing count = %d, want 0", got)
+	}
+}

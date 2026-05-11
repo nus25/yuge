@@ -101,6 +101,32 @@ func (r *OutboxRepository) ListByStatus(ctx context.Context, params projectionre
 	return entries, nil
 }
 
+func (r *OutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT status, COUNT(*)
+		FROM projection_outbox
+		WHERE target = ?
+		GROUP BY status
+	`, params.Target)
+	if err != nil {
+		return nil, fmt.Errorf("count outbox entries by status: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make([]projectionrepo.StatusCount, 0)
+	for rows.Next() {
+		var count projectionrepo.StatusCount
+		if err := rows.Scan(&count.Status, &count.Count); err != nil {
+			return nil, fmt.Errorf("scan outbox status count: %w", err)
+		}
+		counts = append(counts, count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate outbox status counts: %w", err)
+	}
+	return counts, nil
+}
+
 func (r *OutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
 	beginner, ok := r.db.(txBeginner)
 	if !ok {

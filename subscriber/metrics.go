@@ -67,7 +67,13 @@ var (
 		Name: "projection_outbox_errors_total",
 		Help: "The total number of projector processing errors by target and classification",
 	}, []string{"target", "classification"})
+	projectionOutboxEntries = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "projection_outbox_entries",
+		Help: "The current number of projection outbox entries by target and status",
+	}, []string{"target", "status"})
 )
+
+var projectionOutboxStatuses = []string{"pending", "processing", "completed", "dead"}
 
 func updateMetrics(f feed.Feed) {
 	ms := f.Metrics()

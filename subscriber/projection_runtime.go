@@ -3,20 +3,24 @@ package subscriber
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/nus25/yuge/subscriber/projection"
 	"github.com/nus25/yuge/subscriber/projection/gyoka"
+	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 )
 
 const defaultProjectionPollInterval = 250 * time.Millisecond
+const defaultProjectionMetricsInterval = 30 * time.Second
 
 type gyokaProjectionRuntimeOptions struct {
-	pollInterval  time.Duration
-	clientOptions []gyoka.ClientOptionFunc
+	pollInterval    time.Duration
+	metricsInterval time.Duration
+	clientOptions   []gyoka.ClientOptionFunc
 }
 
 type gyokaProjectionRuntime struct {
@@ -36,6 +40,10 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	if pollInterval <= 0 {
 		pollInterval = defaultProjectionPollInterval
 	}
+	metricsInterval := opts.metricsInterval
+	if metricsInterval <= 0 {
+		metricsInterval = defaultProjectionMetricsInterval
+	}
 	gyokaEditor, err := gyoka.NewGyokaEditor(endpoint, logger, opts.clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create gyoka editor: %w", err)
@@ -52,11 +60,20 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	service := projection.NewOutboxService("gyoka", repo, projection.NewGyokaProjector(gyokaEditor))
 	go func() {
 		defer close(done)
+		nextMetricsCollection := time.Time{}
 		for {
 			select {
 			case <-runCtx.Done():
 				return
 			default:
+			}
+
+			now := time.Now()
+			if nextMetricsCollection.IsZero() || !now.Before(nextMetricsCollection) {
+				if err := collectProjectionOutboxMetrics(runCtx, repo, "gyoka"); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Warn("failed to collect projection outbox metrics", "target", "gyoka", "error", err)
+				}
+				nextMetricsCollection = now.Add(metricsInterval)
 			}
 
 			result, err := service.ProcessNextPendingStep(runCtx)
@@ -92,6 +109,23 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	}()
 
 	return &gyokaProjectionRuntime{cancel: cancel, done: done, editor: gyokaEditor}, nil
+}
+
+func collectProjectionOutboxMetrics(ctx context.Context, repo projectionrepo.OutboxRepository, target string) error {
+	if repo == nil {
+		return fmt.Errorf("outbox repository is required")
+	}
+	counts, err := repo.CountByStatus(ctx, projectionrepo.CountByStatusParams{Target: target})
+	if err != nil {
+		return fmt.Errorf("count outbox entries by status: %w", err)
+	}
+	for _, status := range projectionOutboxStatuses {
+		projectionOutboxEntries.WithLabelValues(target, status).Set(0)
+	}
+	for _, count := range counts {
+		projectionOutboxEntries.WithLabelValues(target, count.Status).Set(float64(count.Count))
+	}
+	return nil
 }
 
 func (r *gyokaProjectionRuntime) Close(ctx context.Context) error {

@@ -712,6 +712,10 @@ func (noopOutboxRepository) ListByStatus(ctx context.Context, params projectionr
 	return nil, errors.New("unexpected ListByStatus call")
 }
 
+func (noopOutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
+	return nil, errors.New("unexpected CountByStatus call")
+}
+
 func (noopOutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
 	return projectionrepo.Entry{}, false, errors.New("unexpected ClaimNextPending call")
 }

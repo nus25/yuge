@@ -74,9 +74,19 @@ type PurgeCompletedParams struct {
 	Limit  int
 }
 
+type CountByStatusParams struct {
+	Target string
+}
+
+type StatusCount struct {
+	Status string
+	Count  int64
+}
+
 type OutboxRepository interface {
 	Enqueue(ctx context.Context, params EnqueueParams) error
 	ListByStatus(ctx context.Context, params ListByStatusParams) ([]Entry, error)
+	CountByStatus(ctx context.Context, params CountByStatusParams) ([]StatusCount, error)
 	ClaimNextPending(ctx context.Context, params ClaimNextPendingParams) (Entry, bool, error)
 	MarkCompleted(ctx context.Context, params MarkCompletedParams) error
 	MarkRetryableFailure(ctx context.Context, params MarkRetryableFailureParams) error

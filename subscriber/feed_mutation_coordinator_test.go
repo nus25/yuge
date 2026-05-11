@@ -89,6 +89,10 @@ func (r *fakeOutboxRepository) ListByStatus(ctx context.Context, params projecti
 	return nil, nil
 }
 
+func (r *fakeOutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
+	return nil, nil
+}
+
 func (r *fakeOutboxRepository) ClaimNextPending(ctx context.Context, params projectionrepo.ClaimNextPendingParams) (projectionrepo.Entry, bool, error) {
 	return projectionrepo.Entry{}, false, nil
 }
