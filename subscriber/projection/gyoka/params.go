@@ -1,4 +1,4 @@
-package editor
+package gyoka
 
 import (
 	"time"
@@ -30,6 +30,7 @@ type PostParams struct {
 type BatchPostParams struct {
 	Entries []PostParams
 }
+
 type DeleteParams struct {
 	FeedUri types.FeedUri
 	Did     string

@@ -1,4 +1,4 @@
-package editor
+package gyoka
 
 import (
 	"context"
@@ -55,14 +55,13 @@ type GyokaEditor struct {
 	option    *ClientOption
 	logger    *slog.Logger
 	requestCh chan *feedRequest
-	done      chan struct{} // 追加：終了通知用のチャネル
+	done      chan struct{}
 	mu        sync.RWMutex
 	closeOnce sync.Once
 	closeMu   sync.RWMutex
 	requestMu sync.RWMutex
 	closing   bool
 
-	// for batch add
 	batchPool       []PostParams
 	batchMu         sync.Mutex
 	batchTimer      *time.Timer
@@ -150,7 +149,6 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		}, nil
 	}
 
-	// オプションの適用
 	opt := &ClientOption{
 		authType:            NoAuth,
 		credentials:         make(map[string]string),
@@ -162,7 +160,6 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		retryWaitTime:       defaultRetryWaitTime,
 	}
 
-	//Set custom auth headers
 	ch := make(map[string]string)
 	for _, o := range opts {
 		if o != nil {
@@ -177,7 +174,6 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		}
 	}
 
-	// editor.ClientOptionの作成
 	baseTransport := &http.Transport{
 		MaxIdleConns:        opt.maxIdleConns,
 		MaxIdleConnsPerHost: opt.maxIdleConnsPerHost,
@@ -379,15 +375,14 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 		} else {
 			languages = params.Langs
 		}
-		// Fixing the missing type in composite literal error by specifying the type for Post
 		body := client.PostAddPostJSONRequestBody{
 			Feed: string(params.FeedUri),
 			Post: client.AddPostPostParam{
 				Cid:         params.Cid,
-				FeedContext: nil, //not supported
+				FeedContext: nil,
 				IndexedAt:   &params.IndexedAt,
 				Languages:   &languages,
-				Reason:      nil, //repost is not supported
+				Reason:      nil,
 				Uri:         uri,
 			},
 		}
@@ -399,7 +394,6 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 	case "batchAdd":
 		params := req.BatchAddParams
 
-		// Group entries by feed
 		feedMap := make(map[string][]client.BatchAddPostPostParam)
 		for _, entry := range params.Entries {
 			feedUri := string(entry.FeedUri)
@@ -413,16 +407,15 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 
 			post := client.BatchAddPostPostParam{
 				Cid:         entry.Cid,
-				FeedContext: nil, //not supported
+				FeedContext: nil,
 				IndexedAt:   &entry.IndexedAt,
 				Languages:   &languages,
-				Reason:      nil, //repost is not supported
+				Reason:      nil,
 				Uri:         uri,
 			}
 			feedMap[feedUri] = append(feedMap[feedUri], post)
 		}
 
-		// Build entries array
 		entries := make([]struct {
 			Feed  string                         `json:"feed"`
 			Posts []client.BatchAddPostPostParam `json:"posts"`
@@ -454,7 +447,7 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 		body := client.PostRemovePostJSONRequestBody{
 			Feed: string(params.FeedUri),
 			Post: client.RemovePostPostParam{
-				IndexedAt: nil, //delete all posts for URI
+				IndexedAt: nil,
 				Uri:       uri,
 			},
 		}
@@ -529,7 +522,6 @@ func (e *GyokaEditor) Load(ctx context.Context, params LoadParams) ([]types.Post
 		e.mu.RLock()
 		defer e.mu.RUnlock()
 
-		// getPosts from gyoka
 		var lastErr error
 		for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
 			if attempt > 0 {
@@ -583,7 +575,6 @@ func (e *GyokaEditor) executeLoadRequest(ctx context.Context, params LoadParams)
 				Uri:       types.PostUri(p.Uri),
 				Cid:       p.Cid,
 				IndexedAt: p.IndexedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
-				//Langs is not supported in local cache
 			}
 		}
 		return posts, nil
@@ -620,13 +611,11 @@ func (e *GyokaEditor) Add(params PostParams) error {
 
 	e.batchMu.Lock()
 
-	// 最初のAddはそのまま送信
 	if e.firstAddInBatch {
 		e.firstAddInBatch = false
 		e.lastBatchTime = time.Now()
 		e.batchMu.Unlock()
 
-		// 即座にリクエストを送信
 		errCh := make(chan error, 1)
 		e.requestCh <- &feedRequest{
 			operation: "add",
@@ -634,7 +623,6 @@ func (e *GyokaEditor) Add(params PostParams) error {
 			errCh:     errCh,
 		}
 
-		// タイマーを設定して次のバッチ処理を準備
 		e.batchMu.Lock()
 		if e.batchTimer != nil {
 			e.batchTimer.Stop()
@@ -647,10 +635,8 @@ func (e *GyokaEditor) Add(params PostParams) error {
 		return <-errCh
 	}
 
-	// 2回目以降はプールに追加
 	e.batchPool = append(e.batchPool, params)
 
-	// タイマーがまだセットされていない場合は設定
 	if e.batchTimer == nil {
 		e.batchTimer = time.AfterFunc(e.batchInterval, func() {
 			e.flushBatch()
@@ -659,7 +645,6 @@ func (e *GyokaEditor) Add(params PostParams) error {
 
 	e.batchMu.Unlock()
 
-	// バッチ処理は非同期なので即座に返す
 	return nil
 }
 
@@ -673,7 +658,6 @@ func (e *GyokaEditor) flushBatch() {
 		return
 	}
 
-	// プールからエントリーを取り出す
 	allEntries := make([]PostParams, len(e.batchPool))
 	for i, p := range e.batchPool {
 		allEntries[i] = PostParams{
@@ -686,7 +670,6 @@ func (e *GyokaEditor) flushBatch() {
 		}
 	}
 
-	// プールをクリア
 	e.batchPool = e.batchPool[:0]
 	e.firstAddInBatch = true
 	e.batchTimer = nil
@@ -694,7 +677,6 @@ func (e *GyokaEditor) flushBatch() {
 
 	e.batchMu.Unlock()
 
-	// 25件ごとに分割してBatchAddを実行
 	totalCount := len(allEntries)
 	for i := 0; i < totalCount; i += maxBatchSize {
 		end := i + maxBatchSize
@@ -710,7 +692,6 @@ func (e *GyokaEditor) flushBatch() {
 			errCh:          errCh,
 		}
 
-		// エラーをログに記録（非同期なので呼び出し元には返せない）
 		if err := <-errCh; err != nil {
 			e.logger.Error("batch add failed", "error", err, "count", len(batchEntries), "batch", i/maxBatchSize+1)
 		} else {
@@ -725,7 +706,6 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 		return nil
 	}
 
-	// Validate all feed URIs
 	for _, entry := range params.Entries {
 		if err := entry.FeedUri.Validate(); err != nil {
 			e.logger.Error("invalid feed uri", "error", err)
@@ -733,7 +713,6 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 		}
 	}
 
-	// maxBatchSizeを超える場合は分割して送信
 	totalCount := len(params.Entries)
 	if totalCount == 0 {
 		return nil
@@ -773,7 +752,6 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 				"total_batches", totalBatches,
 				"batch_size", len(batchEntries),
 				"error", err)
-			// 最初のエラーのみ保存
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -865,13 +843,11 @@ func (e *GyokaEditor) Trim(params TrimParams) error {
 }
 
 func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
-	// nothing to save
 	return nil
 }
 
 func (e *GyokaEditor) Close(ctx context.Context) error {
 	if e.client != nil {
-		// クローズ前にバッファされたバッチをフラッシュ
 		e.batchMu.Lock()
 		if e.batchTimer != nil {
 			e.batchTimer.Stop()

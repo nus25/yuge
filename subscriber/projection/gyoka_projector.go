@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/util"
-	"github.com/nus25/yuge/feed/store/editor"
+	"github.com/nus25/yuge/subscriber/projection/gyoka"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	"github.com/nus25/yuge/types"
 )
@@ -17,8 +17,8 @@ var ErrUnsupportedProjectionOperation = errors.New("unsupported projection opera
 var ErrNonRetryableProjection = errors.New("non-retryable projection error")
 
 type GyokaMutator interface {
-	Add(params editor.PostParams) error
-	Delete(params editor.DeleteParams) error
+	Add(params gyoka.PostParams) error
+	Delete(params gyoka.DeleteParams) error
 }
 
 type GyokaProjector struct {
@@ -58,7 +58,7 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
-		if err := p.mutator.Add(editor.PostParams{
+		if err := p.mutator.Add(gyoka.PostParams{
 			FeedUri:   payload.FeedURI,
 			Did:       parsedURI.Did,
 			Rkey:      parsedURI.Rkey,
@@ -66,7 +66,7 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 			IndexedAt: indexedAt,
 			Langs:     payload.Post.Langs,
 		}); err != nil {
-			var nonRetryableErr *editor.NonRetryableError
+			var nonRetryableErr *gyoka.NonRetryableError
 			if errors.As(err, &nonRetryableErr) {
 				return markNonRetryableProjection(fmt.Errorf("project add entry: %w", err))
 			}
@@ -78,12 +78,12 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected post uri: %w", err))
 		}
-		if err := p.mutator.Delete(editor.DeleteParams{
+		if err := p.mutator.Delete(gyoka.DeleteParams{
 			FeedUri: payload.FeedURI,
 			Did:     parsedURI.Did,
 			Rkey:    parsedURI.Rkey,
 		}); err != nil {
-			var nonRetryableErr *editor.NonRetryableError
+			var nonRetryableErr *gyoka.NonRetryableError
 			if errors.As(err, &nonRetryableErr) {
 				return markNonRetryableProjection(fmt.Errorf("project delete entry: %w", err))
 			}

@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/subscriber/projection"
+	"github.com/nus25/yuge/subscriber/projection/gyoka"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 )
 
@@ -16,13 +16,13 @@ const defaultProjectionPollInterval = 250 * time.Millisecond
 
 type gyokaProjectionRuntimeOptions struct {
 	pollInterval  time.Duration
-	clientOptions []editor.ClientOptionFunc
+	clientOptions []gyoka.ClientOptionFunc
 }
 
 type gyokaProjectionRuntime struct {
 	cancel context.CancelFunc
 	done   chan struct{}
-	editor *editor.GyokaEditor
+	editor *gyoka.GyokaEditor
 }
 
 func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger, db *sql.DB, endpoint string, opts gyokaProjectionRuntimeOptions) (*gyokaProjectionRuntime, error) {
@@ -36,7 +36,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	if pollInterval <= 0 {
 		pollInterval = defaultProjectionPollInterval
 	}
-	gyokaEditor, err := editor.NewGyokaEditor(endpoint, logger, opts.clientOptions...)
+	gyokaEditor, err := gyoka.NewGyokaEditor(endpoint, logger, opts.clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create gyoka editor: %w", err)
 	}

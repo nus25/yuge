@@ -1,4 +1,4 @@
-package editor
+package gyoka
 
 import (
 	"context"
@@ -69,7 +69,6 @@ func TestGyokaEditor(t *testing.T) {
 						t.Errorf("expected method POST, got %s", r.Method)
 					}
 
-					// todo fix request check and respose
 					type CreatePostRequest struct {
 						Feed types.FeedUri `json:"feed"`
 						Post *types.Post   `json:"post"`
@@ -106,7 +105,7 @@ func TestGyokaEditor(t *testing.T) {
 			defer cancel()
 
 			go client.Open(ctx)
-			time.Sleep(100 * time.Millisecond) // workerの起動を待つ
+			time.Sleep(100 * time.Millisecond)
 
 			err = client.Add(PostParams{
 				FeedUri:   types.FeedUri(tt.feed),
@@ -122,7 +121,7 @@ func TestGyokaEditor(t *testing.T) {
 				}
 			}
 
-			time.Sleep(100 * time.Millisecond) // リクエストの処理を待つ
+			time.Sleep(100 * time.Millisecond)
 		})
 
 		t.Run("Delete_"+tt.name, func(t *testing.T) {
@@ -181,7 +180,7 @@ func TestGyokaEditor(t *testing.T) {
 			defer cancel()
 
 			go client.Open(ctx)
-			time.Sleep(100 * time.Millisecond) // workerの起動を待つ
+			time.Sleep(100 * time.Millisecond)
 
 			err = client.Delete(DeleteParams{
 				FeedUri: types.FeedUri(tt.feed),
@@ -192,7 +191,7 @@ func TestGyokaEditor(t *testing.T) {
 				t.Errorf("failed to delete post: %v", err)
 			}
 
-			time.Sleep(100 * time.Millisecond) // リクエストの処理を待つ
+			time.Sleep(100 * time.Millisecond)
 		})
 	}
 }
@@ -416,7 +415,6 @@ func TestAuthHeaders(t *testing.T) {
 	t.Run("CloudflareAccess", func(t *testing.T) {
 		testId := "test-id"
 		testSecret := "test-secret"
-		// test server
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("CF-Access-Client-Id") != testId {
@@ -433,7 +431,6 @@ func TestAuthHeaders(t *testing.T) {
 		server := httptest.NewServer(mux)
 		defer server.Close()
 
-		// test client
 		client, err := NewGyokaEditor(server.URL, logger, WithCfToken(testId, testSecret))
 		if err != nil {
 			t.Fatalf("failed to create editor: %v", err)
@@ -450,7 +447,6 @@ func TestAuthHeaders(t *testing.T) {
 	})
 	t.Run("Apikey", func(t *testing.T) {
 		testKey := "test-key"
-		// test server
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("X-Api-Key") != testKey {
@@ -464,7 +460,6 @@ func TestAuthHeaders(t *testing.T) {
 		server := httptest.NewServer(mux)
 		defer server.Close()
 
-		// test client
 		client, err := NewGyokaEditor(server.URL, logger, WithApiKey(testKey))
 		if err != nil {
 			t.Fatalf("failed to create editor: %v", err)
@@ -483,7 +478,6 @@ func TestAuthHeaders(t *testing.T) {
 		testId := "test-id"
 		testSecret := "test-secret"
 		testKey := "test-key"
-		// test server
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("CF-Access-Client-Id") != testId {
@@ -504,7 +498,6 @@ func TestAuthHeaders(t *testing.T) {
 		defer server.Close()
 		var opts []ClientOptionFunc
 		opts = append(opts, WithCfToken(testId, testSecret), WithApiKey(testKey))
-		// test client
 		client, err := NewGyokaEditor(server.URL, logger, opts...)
 		if err != nil {
 			t.Fatalf("failed to create editor: %v", err)
@@ -604,12 +597,10 @@ func TestTrim(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		// クライアントを開始
 		if err = client.Open(ctx); err != nil {
 			t.Fatalf("failed to open client: %v", err)
 		}
 
-		// フィードをトリム
 		if err = client.Trim(params); err != nil {
 			t.Errorf("failed to trim feed: %v", err)
 		}
@@ -943,7 +934,6 @@ func TestBatchAdd(t *testing.T) {
 			atomic.AddInt32(&requestCount, 1)
 
 			if r.URL.Path == "/api/feed/addPost" {
-				// Single add request (first one)
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]any{
 					"message": "success",
@@ -952,7 +942,6 @@ func TestBatchAdd(t *testing.T) {
 			}
 
 			if r.URL.Path == "/api/feed/batchAddPosts" {
-				// Batch add request
 				var req struct {
 					Entries []struct {
 						Feed  string `json:"feed"`
@@ -998,7 +987,6 @@ func TestBatchAdd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 
-		// Add 3 posts in quick succession
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 
 		for i := 0; i < 3; i++ {
@@ -1013,19 +1001,15 @@ func TestBatchAdd(t *testing.T) {
 			if i == 0 && err != nil {
 				t.Errorf("failed to add first post: %v", err)
 			}
-			// Subsequent adds return immediately (batched)
 		}
 
-		// Wait for batch to be processed
 		time.Sleep(2 * time.Second)
 
-		// Should have 2 requests: 1 individual add + 1 batch add
 		finalRequestCount := atomic.LoadInt32(&requestCount)
 		if finalRequestCount != 2 {
 			t.Errorf("expected 2 requests (1 add + 1 batch), got %d", finalRequestCount)
 		}
 
-		// Batch should contain 2 posts (excluding the first one)
 		if lastBatchSize != 2 {
 			t.Errorf("expected batch size 2, got %d", lastBatchSize)
 		}
@@ -1089,7 +1073,6 @@ func TestBatchAdd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 
-		// Use explicit BatchAdd
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 		entries := []PostParams{
 			{
@@ -1223,7 +1206,6 @@ func TestBatchAdd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 
-		// Create a batch larger than maxBatchSize (25)
 		entries := make([]PostParams, 30)
 		feedUri := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/test")
 		for i := 0; i < 30; i++ {
@@ -1242,7 +1224,6 @@ func TestBatchAdd(t *testing.T) {
 			t.Errorf("failed to batch add large set: %v", err)
 		}
 
-		// Should split into multiple batches (25 + 5)
 		finalRequestCount := atomic.LoadInt32(&requestCount)
 		if finalRequestCount != 2 {
 			t.Errorf("expected 2 batch requests for 30 entries, got %d", finalRequestCount)

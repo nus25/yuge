@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nus25/yuge/feed/store/editor"
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
 	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
+	"github.com/nus25/yuge/subscriber/projection/gyoka"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
@@ -77,12 +77,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}
-	var projectionClientOptions []editor.ClientOptionFunc
+	var projectionClientOptions []gyoka.ClientOptionFunc
 	if cfID, cfSecret := cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret"); cfID != "" && cfSecret != "" {
-		projectionClientOptions = append(projectionClientOptions, editor.WithCfToken(cfID, cfSecret))
+		projectionClientOptions = append(projectionClientOptions, gyoka.WithCfToken(cfID, cfSecret))
 	}
 	if apiKey := cctx.String("gyoka-api-key"); apiKey != "" {
-		projectionClientOptions = append(projectionClientOptions, editor.WithApiKey(apiKey))
+		projectionClientOptions = append(projectionClientOptions, gyoka.WithApiKey(apiKey))
 	}
 	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
 	if err != nil {

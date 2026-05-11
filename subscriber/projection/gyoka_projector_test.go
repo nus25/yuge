@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nus25/yuge/feed/store/editor"
+	"github.com/nus25/yuge/subscriber/projection/gyoka"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	"github.com/nus25/yuge/types"
 )
@@ -17,17 +17,17 @@ type spyGyokaMutator struct {
 	deleteErr   error
 	addCalls    int
 	deleteCalls int
-	lastAdd     editor.PostParams
-	lastDelete  editor.DeleteParams
+	lastAdd     gyoka.PostParams
+	lastDelete  gyoka.DeleteParams
 }
 
-func (m *spyGyokaMutator) Add(params editor.PostParams) error {
+func (m *spyGyokaMutator) Add(params gyoka.PostParams) error {
 	m.addCalls++
 	m.lastAdd = params
 	return m.addErr
 }
 
-func (m *spyGyokaMutator) Delete(params editor.DeleteParams) error {
+func (m *spyGyokaMutator) Delete(params gyoka.DeleteParams) error {
 	m.deleteCalls++
 	m.lastDelete = params
 	return m.deleteErr
