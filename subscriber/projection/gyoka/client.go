@@ -554,63 +554,21 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 	if totalCount == 0 {
 		return nil
 	}
+	if totalCount > maxBatchSize {
+		return fmt.Errorf("batch size exceeds limit: %d > %d", totalCount, maxBatchSize)
+	}
 
 	e.logger.Info("processing batch add request", "total_entries", totalCount)
-
-	var firstErr error
-	successCount := 0
-	failureCount := 0
-
-	for i := 0; i < totalCount; i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > totalCount {
-			end = totalCount
-		}
-		batchEntries := params.Entries[i:end]
-		batchNum := i/maxBatchSize + 1
-		totalBatches := (totalCount + maxBatchSize - 1) / maxBatchSize
-
-		e.logger.Info("sending batch request",
-			"batch", batchNum,
-			"total_batches", totalBatches,
-			"batch_size", len(batchEntries))
-
-		err := e.processRequest(&feedRequest{
-			operation:      "batchAdd",
-			BatchAddParams: BatchPostParams{Entries: batchEntries},
-		})
-
-		if err != nil {
-			failureCount += len(batchEntries)
-			e.logger.Error("batch request failed",
-				"batch", batchNum,
-				"total_batches", totalBatches,
-				"batch_size", len(batchEntries),
-				"error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		} else {
-			successCount += len(batchEntries)
-			e.logger.Info("batch request succeeded",
-				"batch", batchNum,
-				"total_batches", totalBatches,
-				"batch_size", len(batchEntries))
-		}
+	err := e.processRequest(&feedRequest{
+		operation:      "batchAdd",
+		BatchAddParams: params,
+	})
+	if err != nil {
+		e.logger.Error("batch request failed", "total_entries", totalCount, "error", err)
+		return err
 	}
 
-	if firstErr != nil {
-		e.logger.Error("batch add completed with errors",
-			"total_entries", totalCount,
-			"success_count", successCount,
-			"failure_count", failureCount,
-			"first_error", firstErr)
-		return fmt.Errorf("batch add partially failed: %d/%d entries succeeded: %w", successCount, totalCount, firstErr)
-	}
-
-	e.logger.Info("batch add completed successfully",
-		"total_entries", totalCount,
-		"success_count", successCount)
+	e.logger.Info("batch add completed successfully", "total_entries", totalCount)
 	return nil
 }
 

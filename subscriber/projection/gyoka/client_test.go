@@ -1171,9 +1171,8 @@ func TestBatchAdd(t *testing.T) {
 		}
 	})
 
-	t.Run("BatchAdd_LargeBatch", func(t *testing.T) {
+	t.Run("BatchAdd_LargeBatchReturnsErrorWithoutSendingRequests", func(t *testing.T) {
 		var requestCount int32
-		var totalProcessed int32
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/gyoka/ping" {
@@ -1186,17 +1185,6 @@ func TestBatchAdd(t *testing.T) {
 
 			if r.URL.Path == "/api/feed/batchAddPosts" {
 				atomic.AddInt32(&requestCount, 1)
-
-				var req struct {
-					Entries []struct {
-						Posts []interface{} `json:"posts"`
-					} `json:"entries"`
-				}
-				json.NewDecoder(r.Body).Decode(&req)
-
-				for _, entry := range req.Entries {
-					atomic.AddInt32(&totalProcessed, int32(len(entry.Posts)))
-				}
 
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]any{
@@ -1232,18 +1220,16 @@ func TestBatchAdd(t *testing.T) {
 		}
 
 		err = client.BatchAdd(BatchPostParams{Entries: entries})
-		if err != nil {
-			t.Errorf("failed to batch add large set: %v", err)
+		if err == nil {
+			t.Fatal("BatchAdd() error = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "batch size exceeds limit") {
+			t.Fatalf("BatchAdd() error = %v, want batch size exceeds limit", err)
 		}
 
 		finalRequestCount := atomic.LoadInt32(&requestCount)
-		if finalRequestCount != 2 {
-			t.Errorf("expected 2 batch requests for 30 entries, got %d", finalRequestCount)
-		}
-
-		finalProcessed := atomic.LoadInt32(&totalProcessed)
-		if finalProcessed != 30 {
-			t.Errorf("expected 30 posts processed, got %d", finalProcessed)
+		if finalRequestCount != 0 {
+			t.Errorf("expected 0 batch requests for oversized batch, got %d", finalRequestCount)
 		}
 	})
 }
