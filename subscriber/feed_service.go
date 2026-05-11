@@ -65,26 +65,9 @@ func (s *FeedService) resolveStoreResources() (storepkg.PostLoader, editor.Store
 	s.mu.RLock()
 	loader := s.storeLoader
 	storeEditor := s.storeEditor
-	dataDir := s.dataDir
-	logger := s.logger
 	s.mu.RUnlock()
 
-	if loader != nil || storeEditor != nil {
-		return loader, storeEditor, nil
-	}
-
-	defaultEditor, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create file editor: %w", err)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.storeLoader != nil || s.storeEditor != nil {
-		return s.storeLoader, s.storeEditor, nil
-	}
-	s.storeEditor = defaultEditor
-	return s.storeLoader, s.storeEditor, nil
+	return loader, storeEditor, nil
 }
 
 func (s *FeedService) getFeedOperationLock(feedID string) *sync.Mutex {

@@ -58,7 +58,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	}
 
 	if cctx.String("feed-editor-endpoint") != "" {
-		logger.Info("feed editor endpoint is ignored in sqlite authoritative mode", "endpoint", cctx.String("feed-editor-endpoint"))
+		logger.Info("configuring gyoka projection runtime", "endpoint", cctx.String("feed-editor-endpoint"))
 	}
 
 	// setup feed service

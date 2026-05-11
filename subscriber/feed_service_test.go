@@ -342,7 +342,11 @@ func TestFeedService_LoadFeeds_WithoutLoader_RestoresEditorSnapshot(t *testing.T
 	}
 
 	ctx := context.Background()
-	service, err := NewFeedService(configDir, dataDir, provider, nil, logger)
+	e, err := editor.NewFileEditor(dataDir, logger)
+	if err != nil {
+		t.Fatalf("Failed to create editor: %v", err)
+	}
+	service, err := NewFeedService(configDir, dataDir, provider, e, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}
@@ -364,7 +368,11 @@ func TestFeedService_LoadFeeds_WithoutLoader_RestoresEditorSnapshot(t *testing.T
 	if err != nil {
 		t.Fatalf("NewFileFeedDefinitionProvider() reload error = %v", err)
 	}
-	reloadedService, err := NewFeedService(configDir, dataDir, reloadedProvider, nil, logger)
+	reloadedEditor, err := editor.NewFileEditor(dataDir, logger)
+	if err != nil {
+		t.Fatalf("Failed to create reload editor: %v", err)
+	}
+	reloadedService, err := NewFeedService(configDir, dataDir, reloadedProvider, reloadedEditor, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() reload error = %v", err)
 	}
@@ -628,7 +636,7 @@ func TestFeedService_CreateFeed_WithLoader_DoesNotCreateDefaultEditor(t *testing
 	}
 }
 
-func TestFeedService_CreateFeed_WithoutLoader_CreatesDefaultEditorOnDemand(t *testing.T) {
+func TestFeedService_CreateFeed_WithoutLoader_LeavesSharedEditorNil(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
@@ -656,8 +664,8 @@ func TestFeedService_CreateFeed_WithoutLoader_CreatesDefaultEditorOnDemand(t *te
 	}, FeedStatusActive); err != nil {
 		t.Fatalf("CreateFeed() error = %v", err)
 	}
-	if service.storeEditor == nil {
-		t.Fatal("expected CreateFeed() without loader to create a default storeEditor")
+	if service.storeEditor != nil {
+		t.Fatal("expected CreateFeed() without loader to leave shared storeEditor nil")
 	}
 }
 
