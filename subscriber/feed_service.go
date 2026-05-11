@@ -12,7 +12,6 @@ import (
 	"github.com/nus25/yuge/feed"
 	"github.com/nus25/yuge/feed/config/provider"
 	storepkg "github.com/nus25/yuge/feed/store"
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -21,7 +20,6 @@ type FeedService struct {
 	definitionProvider  FeedDefinitionProvider
 	configDir           string
 	dataDir             string
-	storeEditor         editor.StoreEditor
 	storeLoader         storepkg.PostLoader
 	mutationCoordinator PostMutationCoordinator
 	feeds               map[string]FeedInfo
@@ -31,7 +29,7 @@ type FeedService struct {
 	feedOpLocks         map[string]*sync.Mutex
 }
 
-func NewFeedService(configDir string, dataDir string, definitionProvider FeedDefinitionProvider, storeEditor editor.StoreEditor, logger *slog.Logger) (*FeedService, error) {
+func NewFeedService(configDir string, dataDir string, definitionProvider FeedDefinitionProvider, logger *slog.Logger) (*FeedService, error) {
 	if logger != nil {
 		logger = slog.Default()
 	}
@@ -47,7 +45,6 @@ func NewFeedService(configDir string, dataDir string, definitionProvider FeedDef
 		configDir:          configDir,
 		dataDir:            dataDir,
 		definitionProvider: definitionProvider,
-		storeEditor:        storeEditor,
 		feeds:              make(map[string]FeedInfo),
 		feedOpLocks:        make(map[string]*sync.Mutex),
 		logger:             logger,
@@ -61,13 +58,11 @@ func (s *FeedService) withFeedOperationLock(feedID string, fn func() error) erro
 	return fn()
 }
 
-func (s *FeedService) resolveStoreResources() (storepkg.PostLoader, editor.StoreEditor, error) {
+func (s *FeedService) resolveStoreResources() storepkg.PostLoader {
 	s.mu.RLock()
 	loader := s.storeLoader
-	storeEditor := s.storeEditor
 	s.mu.RUnlock()
-
-	return loader, storeEditor, nil
+	return loader
 }
 
 func (s *FeedService) getFeedOperationLock(feedID string) *sync.Mutex {
@@ -283,19 +278,6 @@ func (s *FeedService) Shutdown(ctx context.Context) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("multiple feeds failed to shutdown: %v", errs)
 	}
-
-	s.mu.RLock()
-	storeEditor := s.storeEditor
-	s.mu.RUnlock()
-	if storeEditor == nil {
-		return nil
-	}
-
-	// close store editor
-	if err := storeEditor.Close(ctx); err != nil {
-		return fmt.Errorf("failed to close store editor: %w", err)
-	}
-
 	return nil
 }
 
@@ -349,16 +331,12 @@ func (s *FeedService) createFeed(ctx context.Context, def FeedDefinition, status
 	}
 
 	//feed
-	storeLoader, storeEditor, err := s.resolveStoreResources()
-	if err != nil {
-		return err
-	}
+	storeLoader := s.resolveStoreResources()
 	initctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	newFeed, err := feed.NewFeedWithOptions(initctx, feedId, feedUri, feed.FeedOptions{
 		Config:      cp.FeedConfig(),
 		StoreLoader: storeLoader,
-		StoreEditor: storeEditor,
 		Logger:      s.logger,
 	})
 

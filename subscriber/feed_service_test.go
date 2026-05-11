@@ -3,6 +3,7 @@ package subscriber
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"maps"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/nus25/yuge/feed/config/feed"
 	storepkg "github.com/nus25/yuge/feed/store"
-	"github.com/nus25/yuge/feed/store/editor"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	storesqlite "github.com/nus25/yuge/feed/store/sqlite"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
@@ -99,7 +99,6 @@ func (m *MockFeed) Close() error {
 }
 
 func TestNewFeedService(t *testing.T) {
-	// Create temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "feed-service-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -113,16 +112,11 @@ func TestNewFeedService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create feed definition provider: %v", err)
 	}
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
 	tests := []struct {
 		name               string
 		configDir          string
 		dataDir            string
 		definitionProvider FeedDefinitionProvider
-		storeEditor        editor.StoreEditor
 		expectError        bool
 	}{
 		{
@@ -130,22 +124,20 @@ func TestNewFeedService(t *testing.T) {
 			configDir:          configDir,
 			definitionProvider: dp,
 			dataDir:            dataDir,
-			storeEditor:        e,
 			expectError:        false,
 		},
 		{
-			name:               "storeEditorがnilの場合",
+			name:               "definitionProviderがnilでも生成できる",
 			configDir:          configDir,
+			definitionProvider: nil,
 			dataDir:            dataDir,
-			definitionProvider: dp,
-			storeEditor:        nil,
 			expectError:        false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, err := NewFeedService(tt.configDir, tt.dataDir, tt.definitionProvider, tt.storeEditor, logger)
+			service, err := NewFeedService(tt.configDir, tt.dataDir, tt.definitionProvider, logger)
 
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got nil")
@@ -163,11 +155,9 @@ func TestNewFeedService(t *testing.T) {
 				if service.configDir != tt.configDir {
 					t.Errorf("Expected configDir to be %s, got %s", tt.configDir, service.configDir)
 				}
-
 				if service.dataDir != tt.dataDir {
 					t.Errorf("Expected dataDir to be %s, got %s", tt.dataDir, service.dataDir)
 				}
-
 				if service.feeds == nil {
 					t.Error("Expected feeds map to be initialized")
 				}
@@ -187,10 +177,6 @@ func TestFeedService_Load(t *testing.T) {
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
 	p, err := NewFileFeedDefinitionProvider(configDir)
 	if err != nil {
 		t.Fatalf("Failed to create provider: %v", err)
@@ -214,7 +200,7 @@ func TestFeedService_Load(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, err := NewFeedService(configDir, dataDir, tt.provider, e, logger)
+			service, err := NewFeedService(configDir, dataDir, tt.provider, logger)
 			if err != nil {
 				t.Fatalf("Failed to create service: %v", err)
 			}
@@ -288,11 +274,7 @@ func TestFeedService_LoadFeeds_HydratesPostsFromStoreLoader(t *testing.T) {
 		t.Fatalf("PutPost() error = %v", err)
 	}
 
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	service, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -315,7 +297,7 @@ func TestFeedService_LoadFeeds_HydratesPostsFromStoreLoader(t *testing.T) {
 	}
 }
 
-func TestFeedService_LoadFeeds_WithoutLoader_RestoresEditorSnapshot(t *testing.T) {
+func TestFeedService_LoadFeeds_WithoutLoader_IgnoresLegacySnapshot(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
@@ -342,56 +324,38 @@ func TestFeedService_LoadFeeds_WithoutLoader_RestoresEditorSnapshot(t *testing.T
 	}
 
 	ctx := context.Background()
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
+	legacyFeedDir := filepath.Join(dataDir, definition.ID)
+	if err := os.MkdirAll(legacyFeedDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() legacy feed dir error = %v", err)
 	}
-	service, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	legacyPosts := []types.Post{{
+		Feed:      types.FeedUri(definition.URI),
+		Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
+		Cid:       "cid-1",
+		IndexedAt: time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		Langs:     []string{"ja"},
+	}}
+	legacyPayload, err := json.Marshal(legacyPosts)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyFeedDir, "store.json"), legacyPayload, 0644); err != nil {
+		t.Fatalf("WriteFile() legacy snapshot error = %v", err)
+	}
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}
-	if err := service.CreateFeed(ctx, definition, FeedStatusActive); err != nil {
-		t.Fatalf("CreateFeed() error = %v", err)
-	}
-	info, exists := service.GetFeedInfo(definition.ID)
-	if !exists {
-		t.Fatal("expected feed info to exist after CreateFeed")
-	}
-	if err := info.Feed.AddPost("did:plc:user1", "post1", "cid-1", time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC), []string{"ja"}); err != nil {
-		t.Fatalf("AddPost() error = %v", err)
-	}
-	if err := service.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-
-	reloadedProvider, err := NewFileFeedDefinitionProvider(configDir)
-	if err != nil {
-		t.Fatalf("NewFileFeedDefinitionProvider() reload error = %v", err)
-	}
-	reloadedEditor, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create reload editor: %v", err)
-	}
-	reloadedService, err := NewFeedService(configDir, dataDir, reloadedProvider, reloadedEditor, logger)
-	if err != nil {
-		t.Fatalf("NewFeedService() reload error = %v", err)
-	}
-	if err := reloadedService.LoadFeeds(ctx); err != nil {
+	if err := service.LoadFeeds(ctx); err != nil {
 		t.Fatalf("LoadFeeds() error = %v", err)
 	}
-	reloadedInfo, exists := reloadedService.GetFeedInfo(definition.ID)
+	reloadedInfo, exists := service.GetFeedInfo(definition.ID)
 	if !exists {
 		t.Fatal("expected feed info to exist after LoadFeeds")
 	}
 	posts := reloadedInfo.Feed.ListPost("")
-	if len(posts) != 1 {
-		t.Fatalf("ListPost() len = %d, want 1", len(posts))
-	}
-	if posts[0].Uri != types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1") {
-		t.Fatalf("ListPost()[0].Uri = %s, want %s", posts[0].Uri, types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"))
-	}
-	if err := reloadedService.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown() reload error = %v", err)
+	if len(posts) != 0 {
+		t.Fatalf("ListPost() len = %d, want 0 without loader-backed import", len(posts))
 	}
 }
 
@@ -546,11 +510,7 @@ func TestFeedService_CreateFeed(t *testing.T) {
 	if err := os.WriteFile(sampleConfigPath, yamlStr, 0644); err != nil {
 		t.Fatalf("Failed to write sample config: %v", err)
 	}
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	service, err := NewFeedService(configDir, dataDir, nil, e, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -599,7 +559,7 @@ func TestFeedService_CreateFeed(t *testing.T) {
 	}
 }
 
-func TestFeedService_CreateFeed_WithLoader_DoesNotCreateDefaultEditor(t *testing.T) {
+func TestFeedService_CreateFeed_WithLoader_SucceedsWithoutLegacyEditor(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
@@ -612,14 +572,10 @@ func TestFeedService_CreateFeed_WithLoader_DoesNotCreateDefaultEditor(t *testing
 		t.Fatalf("Failed to write sample config: %v", err)
 	}
 
-	service, err := NewFeedService(configDir, dataDir, nil, nil, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
-	if service.storeEditor != nil {
-		t.Fatal("expected storeEditor to remain nil before loader-backed CreateFeed")
-	}
-
 	service.SetStoreLoader(&staticPostLoader{})
 	if err := service.CreateFeed(context.Background(), FeedDefinition{
 		ID:         "new-feed",
@@ -628,15 +584,12 @@ func TestFeedService_CreateFeed_WithLoader_DoesNotCreateDefaultEditor(t *testing
 	}, FeedStatusActive); err != nil {
 		t.Fatalf("CreateFeed() error = %v", err)
 	}
-	if service.storeEditor != nil {
-		t.Fatal("expected storeEditor to remain nil after loader-backed CreateFeed")
-	}
 	if err := service.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
 }
 
-func TestFeedService_CreateFeed_WithoutLoader_LeavesSharedEditorNil(t *testing.T) {
+func TestFeedService_CreateFeed_WithoutLoader_UsesEmptyInMemoryStore(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
@@ -649,14 +602,10 @@ func TestFeedService_CreateFeed_WithoutLoader_LeavesSharedEditorNil(t *testing.T
 		t.Fatalf("Failed to write sample config: %v", err)
 	}
 
-	service, err := NewFeedService(configDir, dataDir, nil, nil, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
-	if service.storeEditor != nil {
-		t.Fatal("expected storeEditor to remain nil before CreateFeed without loader")
-	}
-
 	if err := service.CreateFeed(context.Background(), FeedDefinition{
 		ID:         "new-feed",
 		URI:        "at://did:plc:1234567890/app.bsky.feed.generator/test",
@@ -664,8 +613,12 @@ func TestFeedService_CreateFeed_WithoutLoader_LeavesSharedEditorNil(t *testing.T
 	}, FeedStatusActive); err != nil {
 		t.Fatalf("CreateFeed() error = %v", err)
 	}
-	if service.storeEditor != nil {
-		t.Fatal("expected CreateFeed() without loader to leave shared storeEditor nil")
+	info, exists := service.GetFeedInfo("new-feed")
+	if !exists {
+		t.Fatal("expected feed info to exist after CreateFeed")
+	}
+	if got := len(info.Feed.ListPost("")); got != 0 {
+		t.Fatalf("ListPost() len = %d, want 0 for in-memory only feed", got)
 	}
 }
 
@@ -682,11 +635,7 @@ func TestFeedService_CreateFeed_SerializesSameFeedID(t *testing.T) {
 		t.Fatalf("Failed to write sample config: %v", err)
 	}
 
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	service, err := NewFeedService(configDir, dataDir, nil, e, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -788,11 +737,7 @@ func TestFeedService_CreateFeed_HydratesPostsFromStoreLoader(t *testing.T) {
 		t.Fatalf("PutPost() error = %v", err)
 	}
 
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	service, err := NewFeedService(configDir, dataDir, nil, e, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -837,11 +782,7 @@ func TestFeedService_ReloadFeed_SerializesSameFeedID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileFeedDefinitionProvider() error = %v", err)
 	}
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	service, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}
@@ -926,15 +867,11 @@ func TestFeedService_ClearFeed_RemovesPersistedPostsBeforeReload(t *testing.T) {
 		t.Fatalf("PutPost() error = %v", err)
 	}
 
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
 	provider, err := NewFileFeedDefinitionProvider(configDir)
 	if err != nil {
 		t.Fatalf("NewFileFeedDefinitionProvider() error = %v", err)
 	}
-	service, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("Failed to create service: %v", err)
 	}

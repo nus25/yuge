@@ -1,7 +1,6 @@
 package editor
 
 import (
-	"context"
 	"time"
 
 	"github.com/nus25/yuge/types"
@@ -45,26 +44,4 @@ type DeleteByDidParams struct {
 type TrimParams struct {
 	FeedUri types.FeedUri
 	Count   int
-}
-
-// StoreEditor はフィードの編集操作を定義する
-type StoreEditor interface {
-	Open(ctx context.Context) error
-
-	Load(ctx context.Context, params LoadParams) ([]types.Post, error)
-	Save(ctx context.Context, params SaveParams) error
-	// Add はフィードに投稿を追加します
-	Add(params PostParams) error
-
-	// Delete はフィードから投稿を削除します
-	Delete(params DeleteParams) error
-
-	// DeleteByDid は指定されたDIDの投稿をすべて削除します
-	DeleteByDid(feedUri types.FeedUri, did string) error
-
-	// Trim はフィードの投稿数を指定された数に制限します
-	Trim(params TrimParams) error
-
-	// Close はフィードエディタの接続を終了します
-	Close(ctx context.Context) error
 }

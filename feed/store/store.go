@@ -11,7 +11,6 @@ import (
 
 	"github.com/nus25/yuge/feed/config/store"
 	cfgTypes "github.com/nus25/yuge/feed/config/types"
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/types"
 )
 
@@ -71,7 +70,6 @@ type StoreImpl struct {
 	posts     []types.Post
 	postIndex map[types.PostUri]struct{} // Index for faster searching
 	loader    PostLoader
-	editor    editor.StoreEditor
 	mu        sync.RWMutex
 	config    cfgTypes.StoreConfig
 	logger    *slog.Logger
@@ -82,7 +80,6 @@ type StoreOptions struct {
 	FeedUri types.FeedUri
 	Config  cfgTypes.StoreConfig
 	Loader  PostLoader
-	Editor  editor.StoreEditor
 	Logger  *slog.Logger
 }
 
@@ -99,14 +96,7 @@ func NewStore(ctx context.Context, options StoreOptions) (Store, error) {
 	} else {
 		l = l.With("component", "Store")
 	}
-	e := options.Editor
-	if e == nil {
-		l.Info("feed editor is not set. store will skip syncing")
-	} else if options.Loader == nil {
-		if err := e.Open(ctx); err != nil {
-			return nil, fmt.Errorf("failed to open editor: %w", err)
-		}
-	}
+	l.Info("store uses loader/in-memory state only")
 	cfg := options.Config
 	if cfg == nil {
 		cfg = store.DefaultStoreConfig()
@@ -116,7 +106,6 @@ func NewStore(ctx context.Context, options StoreOptions) (Store, error) {
 		feedId:    options.FeedId,
 		feedUri:   options.FeedUri,
 		loader:    options.Loader,
-		editor:    e,
 		posts:     make([]types.Post, 0, fitstCapacity),
 		postIndex: make(map[types.PostUri]struct{}),
 		config:    cfg,
@@ -191,32 +180,11 @@ func (s *StoreImpl) loadPosts(ctx context.Context) ([]types.Post, error) {
 			Limit:   s.config.GetTrimAt(),
 		})
 	}
-	if s.editor == nil {
-		return nil, nil
-	}
-	return s.editor.Load(ctx, editor.LoadParams{
-		FeedId:  s.feedId,
-		FeedUri: s.feedUri,
-		Limit:   s.config.GetTrimAt(),
-	})
+	return nil, nil
 }
 
 func (s *StoreImpl) Shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.loader != nil {
-		return nil
-	}
-	if s.editor == nil {
-		return nil
-	}
-	if err := s.editor.Save(ctx, editor.SaveParams{
-		Posts:   s.posts,
-		FeedUri: s.feedUri,
-		FeedId:  s.feedId,
-	}); err != nil {
-		return fmt.Errorf("failed to save posts: %w", err)
-	}
+	_ = ctx
 	return nil
 }
 

@@ -73,7 +73,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		}
 	}
 	logger.Info("creating feed service", "config-directory-path", cctx.String("config-directory-path"), "data-directory-path", cctx.String("data-directory-path"))
-	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, nil, logger)
+	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}

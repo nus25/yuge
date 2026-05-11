@@ -16,8 +16,6 @@ import (
 	"github.com/nus25/yuge/types"
 )
 
-var _ StoreEditor = (*GyokaEditor)(nil) //type check
-
 const (
 	defaultHttpTimeout         = 30 * time.Second
 	defaultMaxIdleConns        = 10

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nus25/yuge/feed/store/editor"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	storesqlite "github.com/nus25/yuge/feed/store/sqlite"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
@@ -36,15 +35,11 @@ func createFeedService(t *testing.T) (*FeedService, string, error) {
 	configDir := filepath.Join(tempDir, "config")
 	dataDir := filepath.Join(tempDir, "data")
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
 	dp, err := NewFileFeedDefinitionProvider(configDir)
 	if err != nil {
 		t.Fatalf("Failed to create feed definition provider: %v", err)
 	}
-	fs, err := NewFeedService(configDir, dataDir, dp, e, logger)
+	fs, err := NewFeedService(configDir, dataDir, dp, logger)
 
 	return fs, tempDir, err
 }
@@ -1226,11 +1221,7 @@ func TestAPIHandler_ReloadAndClearFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create feed definition provider: %v", err)
 	}
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	fs, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	fs, err := NewFeedService(configDir, dataDir, provider, logger)
 	defer os.RemoveAll(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to create feed service: %v", err)
@@ -1335,11 +1326,7 @@ func TestAPIHandler_ClearFeed_PreservesStateOnCoordinatorFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create feed definition provider: %v", err)
 	}
-	e, err := editor.NewFileEditor(dataDir, logger)
-	if err != nil {
-		t.Fatalf("Failed to create editor: %v", err)
-	}
-	fs, err := NewFeedService(configDir, dataDir, provider, e, logger)
+	fs, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("Failed to create feed service: %v", err)
 	}
@@ -1433,7 +1420,7 @@ func TestAPIHandler_AddAcceptedPost_WaitsForClearFeedOnSameFeed(t *testing.T) {
 	}
 	defer persistence.Close()
 
-	fs, err := NewFeedService(configDir, dataDir, nil, nil, logger)
+	fs, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}

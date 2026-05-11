@@ -159,7 +159,7 @@ func TestFeedService_ReloadFeed_DoesNotRestartGyokaProjectionRuntime(t *testing.
 	if err := provider.AddFeedDefinition(definition); err != nil {
 		t.Fatalf("AddFeedDefinition() error = %v", err)
 	}
-	service, err := NewFeedService(configDir, dataDir, provider, nil, logger)
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}

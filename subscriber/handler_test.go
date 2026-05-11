@@ -127,7 +127,7 @@ func (f *fakeHandlerFeed) ProcessCommand(logicBlockName string, command string, 
 func TestHandlePostEvent(t *testing.T) {
 	tmpDir := t.TempDir()
 	logger := slog.Default()
-	fs, err := NewFeedService("", tmpDir, nil, nil, logger)
+	fs, err := NewFeedService("", tmpDir, nil, logger)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestHandlerAddAcceptedPost_WaitsForClearFeedOnSameFeed(t *testing.T) {
 		}
 	}()
 
-	service, err := NewFeedService(configDir, dataDir, nil, nil, logger)
+	service, err := NewFeedService(configDir, dataDir, nil, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}

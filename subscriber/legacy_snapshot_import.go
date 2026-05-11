@@ -9,13 +9,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nus25/yuge/feed/store/editor"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	storesqlite "github.com/nus25/yuge/feed/store/sqlite"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/nus25/yuge/types"
 )
+
+const legacyStoreSnapshotFileName = "store.json"
 
 type importLegacyFileSnapshotsOptions struct {
 	EnqueueProjection bool
@@ -58,7 +59,7 @@ func importLegacyFileSnapshots(ctx context.Context, logger *slog.Logger, definit
 		default:
 		}
 
-		legacyPath := filepath.Join(dataDir, definition.ID, editor.StoreFileName)
+		legacyPath := filepath.Join(dataDir, definition.ID, legacyStoreSnapshotFileName)
 		posts, ok, err := loadLegacySnapshotPosts(legacyPath)
 		if err != nil {
 			return result, fmt.Errorf("load legacy snapshot for feed %s: %w", definition.ID, err)

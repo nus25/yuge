@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nus25/yuge/feed/store/editor"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/nus25/yuge/types"
@@ -63,7 +62,7 @@ func TestImportLegacyFileSnapshots_ImportsPostsAndHydratesFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(legacyFeedDir, editor.StoreFileName), legacyPayload, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(legacyFeedDir, legacyStoreSnapshotFileName), legacyPayload, 0644); err != nil {
 		t.Fatalf("WriteFile() legacy snapshot error = %v", err)
 	}
 
@@ -88,7 +87,7 @@ func TestImportLegacyFileSnapshots_ImportsPostsAndHydratesFeed(t *testing.T) {
 		t.Fatalf("ImportedFeeds = %d, want 1", result.ImportedFeeds)
 	}
 
-	service, err := NewFeedService(configDir, dataDir, provider, nil, logger)
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
 	if err != nil {
 		t.Fatalf("NewFeedService() error = %v", err)
 	}
@@ -164,7 +163,7 @@ func TestImportLegacyFileSnapshots_EnqueueProjection_ReplaysImportedPosts(t *tes
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(legacyFeedDir, editor.StoreFileName), legacyPayload, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(legacyFeedDir, legacyStoreSnapshotFileName), legacyPayload, 0644); err != nil {
 		t.Fatalf("WriteFile() legacy snapshot error = %v", err)
 	}
 

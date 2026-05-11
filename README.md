@@ -10,6 +10,7 @@ Yugeは、[Bluesky](https://bsky.app)のカスタムフィードを作成・管�
 - jetstream からポストを購読してフィードロジックに適合したポストをストアに追加します。
 - configファイルまたはPDSの`app.bsky.feed.generator`レコードにフィードロジックを記述できます。
 - 複数フィードを登録可能
+- 永続状態の正本は SQLite で、Gyoka 反映は非同期 projection として扱います。
 - Yuge単体でフィードジェネレーターとして動作（未実装）
 執筆中
 
@@ -90,7 +91,14 @@ go install github.com/nus25/yuge/cmd/yuge_subscriber
    ```bash
    bin/yuge_subscriber run --help
    ```
-   執筆中
+  migration/cutover が必要な場合のみ、起動時に以下の flag を使います。
+
+  ```bash
+  yuge_subscriber run --import-legacy-store-json
+  yuge_subscriber run --import-legacy-store-json --import-legacy-store-enqueue-projection
+  ```
+
+  通常運用では import flag は不要です。
 
 ## 設定オプション
 執筆中

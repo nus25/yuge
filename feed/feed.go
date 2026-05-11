@@ -13,7 +13,6 @@ import (
 	"github.com/nus25/yuge/feed/logicblock"
 	"github.com/nus25/yuge/feed/metrics"
 	"github.com/nus25/yuge/feed/store"
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/types"
 )
 
@@ -56,9 +55,6 @@ type FeedOptions struct {
 	// StoreLoader hydrates the in-memory cache from an authoritative source.
 	StoreLoader store.PostLoader
 
-	// StoreEditor is the interface for storing and retrieving feed data.
-	StoreEditor editor.StoreEditor
-
 	// Logger is an optional logger for feed operations.
 	// If not specified, slog.Default() will be used.
 	Logger *slog.Logger
@@ -100,7 +96,6 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 		FeedUri: types.FeedUri(feedUri),
 		Config:  cfg.Store(),
 		Loader:  opts.StoreLoader,
-		Editor:  opts.StoreEditor,
 		Logger:  lg,
 	}
 	s, err := store.NewStore(ctx, storeOpts)

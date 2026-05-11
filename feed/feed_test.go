@@ -3,14 +3,12 @@ package feed
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"testing"
 	"time"
 
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/nus25/yuge/feed/config/feed"
 	"github.com/nus25/yuge/feed/config/types"
-	"github.com/nus25/yuge/feed/store/editor"
 )
 
 // Integration test for Feed
@@ -18,18 +16,10 @@ func TestFeedIntegration(t *testing.T) {
 	// Create test configuration
 	config := createTestConfig(t)
 
-	// Create in-memory store
-	dir := t.TempDir()
-	fileEditor, err := editor.NewFileEditor(dir, slog.Default())
-	if err != nil {
-		t.Fatalf("Failed to create file editor: %v", err)
-	}
-
 	// Create Feed
 	ctx := context.Background()
 	feed, err := NewFeedWithOptions(ctx, "test-feed", "at://did:plc:test/app.bsky.feed.generator/test", FeedOptions{
-		Config:      config,
-		StoreEditor: fileEditor,
+		Config: config,
 	})
 
 	if err != nil {
@@ -129,18 +119,10 @@ func TestFeedFiltering(t *testing.T) {
 	// Create test configuration
 	config := createTestConfig(t)
 
-	// Create in-memory store
-	dir := t.TempDir()
-	fileEditor, err := editor.NewFileEditor(dir, slog.Default())
-	if err != nil {
-		t.Fatalf("Failed to create file editor: %v", err)
-	}
-
 	// Create Feed
 	ctx := context.Background()
 	feed, err := NewFeedWithOptions(ctx, "test-filter", "at://did:plc:test/app.bsky.feed.generator/filter", FeedOptions{
-		Config:      config,
-		StoreEditor: fileEditor,
+		Config: config,
 	})
 
 	if err != nil {

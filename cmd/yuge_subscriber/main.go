@@ -91,7 +91,7 @@ func run(args []string) {
 					},
 					&cli.BoolFlag{
 						Name:    "import-legacy-store-json",
-						Usage:   "import legacy FileEditor store.json snapshots into SQLite before startup",
+						Usage:   "import legacy store.json snapshots into SQLite before startup",
 						Value:   false,
 						EnvVars: []string{"IMPORT_LEGACY_STORE_JSON"},
 					},
