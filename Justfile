@@ -1,4 +1,5 @@
-set dotenv-load := true
+set dotenv-load
+set default-list
 
 subscriber-test-go-cmd := "CGO_ENABLED=1 go"
 subscriber-build-go-cmd := "CGO_ENABLED=1 GOOS=linux go"
