@@ -71,8 +71,7 @@ func (c *customHeaderTransport) RoundTrip(req *http.Request) (*http.Response, er
 type ClientOptionFunc func(*ClientOption)
 
 type ClientOption struct {
-	authType            AuthType
-	credentials         map[string]string
+	headers             map[string]string
 	httpTimeout         time.Duration
 	maxIdleConns        int
 	maxIdleConnsPerHost int
@@ -81,29 +80,12 @@ type ClientOption struct {
 	retryWaitTime       time.Duration
 }
 
-type AuthType int
-
-const (
-	NoAuth AuthType = iota
-	CloudflareAccess
-	GyokaApiKey
-)
-
-func WithCfToken(clientID string, clientSecret string) ClientOptionFunc {
+// WithHeaders adds arbitrary HTTP headers sent with every request to gyoka.
+// Calling it multiple times merges the given headers with previously added ones.
+func WithHeaders(headers map[string]string) ClientOptionFunc {
 	return func(opt *ClientOption) {
-		opt.authType = CloudflareAccess
-		opt.credentials = map[string]string{
-			"clientId":     clientID,
-			"clientSecret": clientSecret,
-		}
-	}
-}
-
-func WithApiKey(key string) ClientOptionFunc {
-	return func(opt *ClientOption) {
-		opt.authType = GyokaApiKey
-		opt.credentials = map[string]string{
-			"apiKey": key,
+		for k, v := range headers {
+			opt.headers[k] = v
 		}
 	}
 }
@@ -129,8 +111,7 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 	}
 
 	opt := &ClientOption{
-		authType:            NoAuth,
-		credentials:         make(map[string]string),
+		headers:             make(map[string]string),
 		httpTimeout:         defaultHttpTimeout,
 		maxIdleConns:        defaultMaxIdleConns,
 		maxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
@@ -139,19 +120,12 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		retryWaitTime:       defaultRetryWaitTime,
 	}
 
-	ch := make(map[string]string)
 	for _, o := range opts {
 		if o != nil {
 			o(opt)
-			switch opt.authType {
-			case CloudflareAccess:
-				ch["CF-Access-Client-Id"] = opt.credentials["clientId"]
-				ch["CF-Access-Client-Secret"] = opt.credentials["clientSecret"]
-			case GyokaApiKey:
-				ch["X-API-Key"] = opt.credentials["apiKey"]
-			}
 		}
 	}
+	ch := opt.headers
 
 	baseTransport := &http.Transport{
 		MaxIdleConns:        opt.maxIdleConns,

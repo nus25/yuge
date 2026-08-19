@@ -41,23 +41,11 @@ func run(args []string) {
 						EnvVars:  []string{"FEED_EDITOR_ENDPOINT"},
 						Required: false,
 					},
-					&cli.StringFlag{
-						Name:    "feed-editor-cf-id",
-						Usage:   "Cloudflare access id",
-						Value:   "",
-						EnvVars: []string{"CF_ACCESS_CLIENT_ID"},
-					},
-					&cli.StringFlag{
-						Name:    "feed-editor-cf-secret",
-						Usage:   "Cloudflare access secret",
-						Value:   "",
-						EnvVars: []string{"CF_ACCESS_CLIENT_SECRET"},
-					},
-					&cli.StringFlag{
-						Name:    "gyoka-api-key",
-						Usage:   "Gyoka API key",
-						Value:   "",
-						EnvVars: []string{"GYOKA_API_KEY"},
+					&cli.StringSliceFlag{
+						Name:    "feed-editor-header",
+						Aliases: []string{"H"},
+						Usage:   "extra HTTP header sent with gyoka projection requests, format 'Key: Value' (repeatable)",
+						EnvVars: []string{"FEED_EDITOR_HEADERS"},
 					},
 					&cli.StringFlag{
 						Name:    "jetstream-url",

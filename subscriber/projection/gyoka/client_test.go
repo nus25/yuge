@@ -452,16 +452,14 @@ func TestIsRetryableError(t *testing.T) {
 func TestAuthHeaders(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	t.Run("CloudflareAccess", func(t *testing.T) {
-		testId := "test-id"
-		testSecret := "test-secret"
+	t.Run("CustomHeaders", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("CF-Access-Client-Id") != testId {
+			if r.Header.Get("CF-Access-Client-Id") != "test-id" {
 				t.Errorf("CF-Access-Client-Id in header mismatching %s", r.Header.Get("CF-Access-Client-Id"))
 			}
-			if r.Header.Get("CF-Access-Client-Secret") != testSecret {
-				t.Errorf("CF-Access-Client-Secret in header mismatching %s", r.Header.Get("CF-Access-Client-Secret"))
+			if r.Header.Get("X-Api-Key") != "test-key" {
+				t.Errorf("X-Api-Key in header mismatching %s", r.Header.Get("X-Api-Key"))
 			}
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]any{
@@ -471,7 +469,10 @@ func TestAuthHeaders(t *testing.T) {
 		server := httptest.NewServer(mux)
 		defer server.Close()
 
-		client, err := NewGyokaEditor(server.URL, logger, WithCfToken(testId, testSecret))
+		client, err := NewGyokaEditor(server.URL, logger, WithHeaders(map[string]string{
+			"CF-Access-Client-Id": "test-id",
+			"X-Api-Key":           "test-key",
+		}))
 		if err != nil {
 			t.Fatalf("failed to create editor: %v", err)
 		}
@@ -485,49 +486,14 @@ func TestAuthHeaders(t *testing.T) {
 			t.Error("error in request")
 		}
 	})
-	t.Run("Apikey", func(t *testing.T) {
-		testKey := "test-key"
+	t.Run("MultipleWithHeadersCallsMerge", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-Api-Key") != testKey {
-				t.Errorf("X-Api-Key in header mismatching %s", r.Header.Get("X-Api-Key"))
+			if r.Header.Get("X-First") != "1" {
+				t.Errorf("X-First in header mismatching %s", r.Header.Get("X-First"))
 			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{
-				"message": "Gyoka is available",
-			})
-		})
-		server := httptest.NewServer(mux)
-		defer server.Close()
-
-		client, err := NewGyokaEditor(server.URL, logger, WithApiKey(testKey))
-		if err != nil {
-			t.Fatalf("failed to create editor: %v", err)
-		}
-		if client.client == nil {
-			t.Error("client is nil")
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-		err = client.Open(ctx)
-		if err != nil {
-			t.Error("error in request")
-		}
-	})
-	t.Run("Both", func(t *testing.T) {
-		testId := "test-id"
-		testSecret := "test-secret"
-		testKey := "test-key"
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("CF-Access-Client-Id") != testId {
-				t.Errorf("CF-Access-Client-Id in header mismatching %s", r.Header.Get("CF-Access-Client-Id"))
-			}
-			if r.Header.Get("CF-Access-Client-Secret") != testSecret {
-				t.Errorf("CF-Access-Client-Secret in header mismatching %s", r.Header.Get("CF-Access-Client-Secret"))
-			}
-			if r.Header.Get("X-Api-Key") != testKey {
-				t.Errorf("X-Api-Key in header mismatching %s", r.Header.Get("X-Api-Key"))
+			if r.Header.Get("X-Second") != "2" {
+				t.Errorf("X-Second in header mismatching %s", r.Header.Get("X-Second"))
 			}
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]any{
@@ -537,7 +503,7 @@ func TestAuthHeaders(t *testing.T) {
 		server := httptest.NewServer(mux)
 		defer server.Close()
 		var opts []ClientOptionFunc
-		opts = append(opts, WithCfToken(testId, testSecret), WithApiKey(testKey))
+		opts = append(opts, WithHeaders(map[string]string{"X-First": "1"}), WithHeaders(map[string]string{"X-Second": "2"}))
 		client, err := NewGyokaEditor(server.URL, logger, opts...)
 		if err != nil {
 			t.Fatalf("failed to create editor: %v", err)
@@ -552,14 +518,11 @@ func TestAuthHeaders(t *testing.T) {
 			t.Error("error in request")
 		}
 	})
-	t.Run("NoAuth", func(t *testing.T) {
+	t.Run("NoHeaders", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/api/gyoka/ping", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("CF-Access-Client-Id") != "" {
 				t.Error("CF-Access-Client-Id is in header")
-			}
-			if r.Header.Get("CF-Access-Client-Secret") != "" {
-				t.Error("CF-Access-Client-Secret is in header")
 			}
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]any{

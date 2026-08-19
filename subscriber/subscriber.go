@@ -78,11 +78,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}
 	var projectionClientOptions []gyoka.ClientOptionFunc
-	if cfID, cfSecret := cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret"); cfID != "" && cfSecret != "" {
-		projectionClientOptions = append(projectionClientOptions, gyoka.WithCfToken(cfID, cfSecret))
+	headers, err := parseHeaderFlags(cctx.StringSlice("feed-editor-header"))
+	if err != nil {
+		return fmt.Errorf("invalid feed-editor-header: %w", err)
 	}
-	if apiKey := cctx.String("gyoka-api-key"); apiKey != "" {
-		projectionClientOptions = append(projectionClientOptions, gyoka.WithApiKey(apiKey))
+	if len(headers) > 0 {
+		projectionClientOptions = append(projectionClientOptions, gyoka.WithHeaders(headers))
 	}
 	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
 	if err != nil {
