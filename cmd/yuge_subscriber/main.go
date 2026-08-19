@@ -47,6 +47,12 @@ func run(args []string) {
 						Usage:   "extra HTTP header sent with gyoka projection requests, format 'Key: Value' (repeatable)",
 						EnvVars: []string{"FEED_EDITOR_HEADERS"},
 					},
+					&cli.IntFlag{
+						Name:    "gyoka-min-request-interval-ms",
+						Usage:   "minimum interval between Gyoka projection requests in milliseconds",
+						Value:   1000,
+						EnvVars: []string{"GYOKA_MIN_REQUEST_INTERVAL_MS"},
+					},
 					&cli.StringFlag{
 						Name:    "jetstream-url",
 						Usage:   "full websocket path to the jetstream endpoint",

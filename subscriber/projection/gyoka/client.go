@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	client "github.com/nus25/gyoka-client/go"
@@ -22,6 +23,7 @@ const (
 	defaultIdleConnTimeout     = 90 * time.Second
 	defaultMaxRetries          = 3
 	defaultRetryWaitTime       = 2 * time.Second
+	defaultMinRequestInterval  = time.Second
 	maxBatchSize               = 25
 )
 
@@ -48,9 +50,11 @@ type feedRequest struct {
 }
 
 type GyokaEditor struct {
-	client *client.ClientWithResponses
-	option *ClientOption
-	logger *slog.Logger
+	client            *client.ClientWithResponses
+	option            *ClientOption
+	logger            *slog.Logger
+	requestScheduleMu sync.Mutex
+	nextRequestAt     time.Time
 }
 
 type customHeaderTransport struct {
@@ -78,6 +82,7 @@ type ClientOption struct {
 	idleConnTimeout     time.Duration
 	maxRetries          int
 	retryWaitTime       time.Duration
+	minRequestInterval  time.Duration
 }
 
 // WithHeaders adds arbitrary HTTP headers sent with every request to gyoka.
@@ -93,6 +98,12 @@ func WithHeaders(headers map[string]string) ClientOptionFunc {
 func WithRetryWaitTime(retryWaitTime time.Duration) ClientOptionFunc {
 	return func(opt *ClientOption) {
 		opt.retryWaitTime = retryWaitTime
+	}
+}
+
+func WithMinRequestInterval(minRequestInterval time.Duration) ClientOptionFunc {
+	return func(opt *ClientOption) {
+		opt.minRequestInterval = minRequestInterval
 	}
 }
 
@@ -118,6 +129,7 @@ func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (
 		idleConnTimeout:     defaultIdleConnTimeout,
 		maxRetries:          defaultMaxRetries,
 		retryWaitTime:       defaultRetryWaitTime,
+		minRequestInterval:  defaultMinRequestInterval,
 	}
 
 	for _, o := range opts {
@@ -245,6 +257,9 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 			}
 		}
 
+		if err := e.waitForRequestSlot(ctx); err != nil {
+			return err
+		}
 		err := e.executeRequest(ctx, req)
 		if err == nil {
 			return nil
@@ -263,6 +278,23 @@ func (e *GyokaEditor) processRequest(req *feedRequest) error {
 
 	e.logger.Error("request failed after all retries", "operation", req.operation, "attempts", e.option.maxRetries+1, "error", lastErr, "params", req)
 	return lastErr
+}
+
+func (e *GyokaEditor) waitForRequestSlot(ctx context.Context) error {
+	if e.option.minRequestInterval <= 0 {
+		return nil
+	}
+
+	e.requestScheduleMu.Lock()
+	defer e.requestScheduleMu.Unlock()
+
+	if delay := time.Until(e.nextRequestAt); delay > 0 {
+		if err := waitForRetry(ctx, delay); err != nil {
+			return err
+		}
+	}
+	e.nextRequestAt = time.Now().Add(e.option.minRequestInterval)
+	return nil
 }
 
 func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) error {
@@ -392,6 +424,9 @@ func (e *GyokaEditor) handleResponse(statusCode int, body []byte) error {
 		return &NonRetryableError{fmt.Errorf("request error (non-retryable): %s", string(body))}
 	default:
 		if isRetryableError(statusCode) {
+			if statusCode == http.StatusTooManyRequests {
+				e.logger.Error("gyoka request rate limited", "status", statusCode, "body", string(body))
+			}
 			return fmt.Errorf("retryable error: status=%d, body=%s", statusCode, string(body))
 		}
 		return &NonRetryableError{fmt.Errorf("unexpected request error: status=%d, body=%s", statusCode, string(body))}

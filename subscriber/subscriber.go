@@ -41,6 +41,10 @@ func getLogLevel(level string) slog.Level {
 	}
 }
 
+func gyokaMinRequestInterval(cctx *cli.Context) time.Duration {
+	return time.Duration(cctx.Int("gyoka-min-request-interval-ms")) * time.Millisecond
+}
+
 func JetstreamSubscriber(cctx *cli.Context) error {
 	ctx := cctx.Context
 	//// Prepare
@@ -85,6 +89,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	if len(headers) > 0 {
 		projectionClientOptions = append(projectionClientOptions, gyoka.WithHeaders(headers))
 	}
+	projectionClientOptions = append(projectionClientOptions, gyoka.WithMinRequestInterval(gyokaMinRequestInterval(cctx)))
 	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
 	if err != nil {
 		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)

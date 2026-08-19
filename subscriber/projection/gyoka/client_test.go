@@ -1,6 +1,7 @@
 package gyoka
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -912,6 +913,84 @@ func TestGyokaEditorErrorMessages(t *testing.T) {
 			t.Errorf("expected error message to contain 'invalid feed uri', got: %v", err)
 		}
 	})
+}
+
+func TestGyokaEditor_MinRequestInterval(t *testing.T) {
+	const minInterval = 25 * time.Millisecond
+
+	requestTimes := make(chan time.Time, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/feed/addPost" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		requestTimes <- time.Now()
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"message": "success"})
+	}))
+	defer server.Close()
+
+	client, err := NewGyokaEditor(server.URL, slog.Default(), WithMinRequestInterval(minInterval))
+	if err != nil {
+		t.Fatalf("NewGyokaEditor() error = %v", err)
+	}
+	params := PostParams{
+		FeedUri:   "at://did:plc:test/app.bsky.feed.generator/sample",
+		Did:       "did:plc:user",
+		Rkey:      "post",
+		Cid:       "cid",
+		IndexedAt: time.Now(),
+	}
+	if err := client.Add(params); err != nil {
+		t.Fatalf("first Add() error = %v", err)
+	}
+	params.Rkey = "post-two"
+	if err := client.Add(params); err != nil {
+		t.Fatalf("second Add() error = %v", err)
+	}
+
+	firstRequestAt := <-requestTimes
+	secondRequestAt := <-requestTimes
+	if elapsed := secondRequestAt.Sub(firstRequestAt); elapsed < minInterval {
+		t.Fatalf("request interval = %v, want at least %v", elapsed, minInterval)
+	}
+}
+
+func TestNewGyokaEditor_DefaultMinRequestInterval(t *testing.T) {
+	client, err := NewGyokaEditor("http://gyoka.example", slog.Default())
+	if err != nil {
+		t.Fatalf("NewGyokaEditor() error = %v", err)
+	}
+	if client.option.minRequestInterval != time.Second {
+		t.Fatalf("minRequestInterval = %v, want %v", client.option.minRequestInterval, time.Second)
+	}
+}
+
+func TestGyokaEditor_LogsRateLimitResponse(t *testing.T) {
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewGyokaEditor(server.URL, logger, WithMinRequestInterval(0), WithRetryWaitTime(time.Microsecond))
+	if err != nil {
+		t.Fatalf("NewGyokaEditor() error = %v", err)
+	}
+	err = client.Add(PostParams{
+		FeedUri:   "at://did:plc:test/app.bsky.feed.generator/sample",
+		Did:       "did:plc:user",
+		Rkey:      "post",
+		Cid:       "cid",
+		IndexedAt: time.Now(),
+	})
+	if err == nil {
+		t.Fatal("Add() error = nil, want error")
+	}
+	if logs := logOutput.String(); !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "status=429") {
+		t.Fatalf("log output = %q, want error log for status 429", logs)
+	}
 }
 
 func TestBatchAdd(t *testing.T) {
