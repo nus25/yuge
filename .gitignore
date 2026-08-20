@@ -27,3 +27,5 @@ bin/
 
 /data/
 /config/
+
+.DS_Store
