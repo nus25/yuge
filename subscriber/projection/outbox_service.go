@@ -31,8 +31,12 @@ const (
 )
 
 type ProcessResult struct {
-	Processed bool
-	Outcome   ProcessOutcome
+	Processed  bool
+	Outcome    ProcessOutcome
+	EntryID    int64
+	Operation  string
+	FeedURI    string
+	EntryCount int
 }
 
 type OutboxService struct {
@@ -72,16 +76,19 @@ func (s *OutboxService) ProcessNextPendingStep(ctx context.Context) (ProcessResu
 		if len(entries) == 1 {
 			return s.processSingleEntry(ctx, entries[0])
 		}
+		result := processResultForEntries(entries)
 		if err := batchProjector.ProjectBatch(ctx, entries); err != nil {
 			if markErr := s.markFailedEntries(ctx, entries, err.Error()); markErr != nil {
-				return ProcessResult{Processed: true, Outcome: ProcessOutcomeNone}, fmt.Errorf("mark outbox batch failed: %w", markErr)
+				return result, fmt.Errorf("mark outbox batch failed: %w", markErr)
 			}
-			return ProcessResult{Processed: true, Outcome: ProcessOutcomeFailed}, fmt.Errorf("project outbox batch starting at %d: %w", entries[0].ID, err)
+			result.Outcome = ProcessOutcomeFailed
+			return result, fmt.Errorf("project outbox batch starting at %d: %w", entries[0].ID, err)
 		}
 		if err := s.markCompletedEntries(ctx, entries); err != nil {
-			return ProcessResult{Processed: true, Outcome: ProcessOutcomeNone}, fmt.Errorf("mark outbox batch completed: %w", err)
+			return result, fmt.Errorf("mark outbox batch completed: %w", err)
 		}
-		return ProcessResult{Processed: true, Outcome: ProcessOutcomeCompleted}, nil
+		result.Outcome = ProcessOutcomeCompleted
+		return result, nil
 	}
 	return s.processNextSingleEntry(ctx)
 }
@@ -98,26 +105,44 @@ func (s *OutboxService) processNextSingleEntry(ctx context.Context) (ProcessResu
 }
 
 func (s *OutboxService) processSingleEntry(ctx context.Context, entry projectionrepo.Entry) (ProcessResult, error) {
+	result := processResultForEntries([]projectionrepo.Entry{entry})
 	if err := s.projector.Project(ctx, entry); err != nil {
 		if errors.Is(err, ErrNonRetryableProjection) {
 			if markErr := s.repo.MarkDead(ctx, projectionrepo.MarkDeadParams{ID: entry.ID, LastError: err.Error()}); markErr != nil {
-				return ProcessResult{Processed: true, Outcome: ProcessOutcomeNone}, fmt.Errorf("mark outbox entry %d dead: %w", entry.ID, markErr)
+				return result, fmt.Errorf("mark outbox entry %d dead: %w", entry.ID, markErr)
 			}
-			return ProcessResult{Processed: true, Outcome: ProcessOutcomeDead}, fmt.Errorf("project outbox entry %d: %w", entry.ID, err)
+			result.Outcome = ProcessOutcomeDead
+			return result, fmt.Errorf("project outbox entry %d: %w", entry.ID, err)
 		}
 		if markErr := s.repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
 			ID:          entry.ID,
 			LastError:   err.Error(),
 			NextRetryAt: time.Now().UTC().Add(defaultRetryDelay),
 		}); markErr != nil {
-			return ProcessResult{Processed: true, Outcome: ProcessOutcomeNone}, fmt.Errorf("mark outbox entry %d retryable failure: %w", entry.ID, markErr)
+			return result, fmt.Errorf("mark outbox entry %d retryable failure: %w", entry.ID, markErr)
 		}
-		return ProcessResult{Processed: true, Outcome: ProcessOutcomeRetried}, fmt.Errorf("project outbox entry %d: %w", entry.ID, err)
+		result.Outcome = ProcessOutcomeRetried
+		return result, fmt.Errorf("project outbox entry %d: %w", entry.ID, err)
 	}
 	if err := s.repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: entry.ID}); err != nil {
-		return ProcessResult{Processed: true, Outcome: ProcessOutcomeNone}, fmt.Errorf("mark outbox entry %d completed: %w", entry.ID, err)
+		return result, fmt.Errorf("mark outbox entry %d completed: %w", entry.ID, err)
 	}
-	return ProcessResult{Processed: true, Outcome: ProcessOutcomeCompleted}, nil
+	result.Outcome = ProcessOutcomeCompleted
+	return result, nil
+}
+
+func processResultForEntries(entries []projectionrepo.Entry) ProcessResult {
+	if len(entries) == 0 {
+		return ProcessResult{}
+	}
+	first := entries[0]
+	return ProcessResult{
+		Processed:  true,
+		EntryID:    first.ID,
+		Operation:  first.Operation,
+		FeedURI:    first.FeedURI,
+		EntryCount: len(entries),
+	}
 }
 
 func (s *OutboxService) markCompletedEntries(ctx context.Context, entries []projectionrepo.Entry) error {

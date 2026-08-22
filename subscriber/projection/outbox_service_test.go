@@ -74,12 +74,21 @@ func TestOutboxService_ProcessNextPending_CompletesClaimedEntry(t *testing.T) {
 	projector := &spyEntryProjector{}
 	service := NewOutboxService("gyoka", repo, projector)
 
-	processed, err := service.ProcessNextPending(ctx)
+	result, err := service.ProcessNextPendingStep(ctx)
 	if err != nil {
-		t.Fatalf("ProcessNextPending() error = %v", err)
+		t.Fatalf("ProcessNextPendingStep() error = %v", err)
 	}
-	if !processed {
-		t.Fatal("ProcessNextPending() processed = false, want true")
+	if !result.Processed {
+		t.Fatal("ProcessNextPendingStep() processed = false, want true")
+	}
+	if result.EntryID != 1 {
+		t.Errorf("EntryID = %d, want 1", result.EntryID)
+	}
+	if result.Operation != "add" {
+		t.Errorf("Operation = %q, want add", result.Operation)
+	}
+	if result.FeedURI != "at://did:plc:test/app.bsky.feed.generator/sample" {
+		t.Errorf("FeedURI = %q", result.FeedURI)
 	}
 	if projector.projectCalls != 1 {
 		t.Fatalf("projector calls = %d, want 1", projector.projectCalls)

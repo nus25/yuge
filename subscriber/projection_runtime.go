@@ -27,6 +27,7 @@ type gyokaProjectionRuntime struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	editor *gyoka.GyokaEditor
+	logger *slog.Logger
 }
 
 func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger, db *sql.DB, config gyoka.ClientConfig, opts gyokaProjectionRuntimeOptions) (*gyokaProjectionRuntime, error) {
@@ -53,6 +54,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	if err := gyokaEditor.Open(openCtx); err != nil {
 		return nil, fmt.Errorf("open gyoka editor: %w", err)
 	}
+	logger.Info("gyoka projection runtime started", "target", "gyoka", "host", config.Host)
 
 	runCtx, cancel := context.WithCancel(parentCtx)
 	done := make(chan struct{})
@@ -78,19 +80,30 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 
 			result, err := service.ProcessNextPendingStep(runCtx)
 			if err != nil {
+				logArgs := []any{
+					"target", "gyoka",
+					"outboxID", result.EntryID,
+					"operation", result.Operation,
+					"feedURI", result.FeedURI,
+					"entryCount", result.EntryCount,
+					"error", err,
+				}
 				switch result.Outcome {
 				case projection.ProcessOutcomeDead:
 					projectionOutboxErrors.WithLabelValues("gyoka", "non_retryable").Inc()
 					projectionOutboxDead.WithLabelValues("gyoka").Inc()
+					logger.Error("gyoka projection entry marked dead", logArgs...)
 				case projection.ProcessOutcomeFailed:
 					projectionOutboxErrors.WithLabelValues("gyoka", "manual").Inc()
+					logger.Error("gyoka projection entry requires manual retry", logArgs...)
 				case projection.ProcessOutcomeRetried:
 					projectionOutboxErrors.WithLabelValues("gyoka", "retryable").Inc()
 					projectionOutboxRetried.WithLabelValues("gyoka").Inc()
+					logger.Warn("gyoka projection entry scheduled for retry", logArgs...)
 				default:
 					projectionOutboxErrors.WithLabelValues("gyoka", "internal").Inc()
+					logger.Error("gyoka projection step failed", logArgs...)
 				}
-				logger.Warn("gyoka projection step failed", "error", err)
 			} else if result.Outcome == projection.ProcessOutcomeCompleted {
 				projectionOutboxCompleted.WithLabelValues("gyoka").Inc()
 			}
@@ -110,7 +123,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 		}
 	}()
 
-	return &gyokaProjectionRuntime{cancel: cancel, done: done, editor: gyokaEditor}, nil
+	return &gyokaProjectionRuntime{cancel: cancel, done: done, editor: gyokaEditor, logger: logger}, nil
 }
 
 func collectProjectionOutboxMetrics(ctx context.Context, repo projectionrepo.OutboxRepository, target string) error {
@@ -148,6 +161,9 @@ func (r *gyokaProjectionRuntime) Close(ctx context.Context) error {
 		if err := r.editor.Close(ctx); err != nil {
 			return fmt.Errorf("close gyoka editor: %w", err)
 		}
+	}
+	if r.logger != nil {
+		r.logger.Info("gyoka projection runtime stopped", "target", "gyoka")
 	}
 	return nil
 }

@@ -123,11 +123,14 @@ func WithMinRequestInterval(minRequestInterval time.Duration) ClientOptionFunc {
 }
 
 func NewGyokaEditor(ctx context.Context, config ClientConfig, logger *slog.Logger, opts ...ClientOptionFunc) (*GyokaEditor, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	atprotoClient, err := client.New(ctx, config.Host, config.UserIdentity, config.AppPassword)
-	logger.Info("Creating AT Protocol Gyoka client", "host", config.Host, "userIdentity", config.UserIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("create AT Protocol Gyoka client: %w", err)
 	}
+	logger.Info("authenticated AT Protocol Gyoka client", "host", config.Host, "userIdentity", config.UserIdentity)
 	return newGyokaEditor(&atprotoGyokaAPI{client: atprotoClient}, logger, opts...), nil
 }
 
