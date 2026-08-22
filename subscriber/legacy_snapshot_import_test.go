@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -185,52 +183,4 @@ func TestImportLegacyFileSnapshots_EnqueueProjection_ReplaysImportedPosts(t *tes
 		t.Fatalf("EnqueuedProjectionOps = %d, want 1", result.EnqueuedProjectionOps)
 	}
 
-	requests := make(chan string, 4)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/gyoka/ping":
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{"message": "Gyoka is available"})
-		case "/api/feed/addPost":
-			requests <- r.URL.Path
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{"message": "success"})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	runtime, err := startGyokaProjectionRuntime(ctx, logger, persistence.mutationDB, server.URL, gyokaProjectionRuntimeOptions{pollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatalf("startGyokaProjectionRuntime() error = %v", err)
-	}
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := runtime.Close(shutdownCtx); err != nil {
-			t.Fatalf("runtime.Close() error = %v", err)
-		}
-	})
-
-	select {
-	case <-requests:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for Gyoka replay add request")
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		completedEntries, err := projectionsqlite.NewOutboxRepository(persistence.loaderDB).ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
-		if err != nil {
-			t.Fatalf("ListByStatus() error = %v", err)
-		}
-		if len(completedEntries) == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }

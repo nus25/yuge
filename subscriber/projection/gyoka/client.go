@@ -2,33 +2,28 @@ package gyoka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
 	"sync"
 	"time"
 
-	client "github.com/nus25/gyoka-client/go"
+	client "github.com/nus25/gyoka-client/go-atproto"
+	gyokaschema "github.com/nus25/gyoka-client/go-atproto/schema/gyoka"
 	"github.com/nus25/yuge/types"
 )
 
 const (
-	defaultHttpTimeout         = 30 * time.Second
-	defaultMaxIdleConns        = 10
-	defaultMaxIdleConnsPerHost = 10
-	defaultIdleConnTimeout     = 90 * time.Second
-	defaultMaxRetries          = 3
-	defaultRetryWaitTime       = 2 * time.Second
-	defaultMinRequestInterval  = time.Second
-	maxBatchSize               = 25
+	defaultMaxRetries         = 3
+	defaultRetryWaitTime      = 2 * time.Second
+	defaultMinRequestInterval = time.Second
+	maxBatchSize              = 25
 )
 
 func isRetryableError(statusCode int) bool {
-	return statusCode >= 500 || statusCode == 429 || statusCode == 408
+	return statusCode >= http.StatusInternalServerError || statusCode == http.StatusTooManyRequests || statusCode == http.StatusRequestTimeout
 }
 
 func calculateBackoffDelay(attempt int, baseDelay time.Duration) time.Duration {
@@ -40,254 +35,176 @@ func calculateBackoffDelay(attempt int, baseDelay time.Duration) time.Duration {
 	return time.Duration(delay + jitter)
 }
 
+type ClientConfig struct {
+	Host         string
+	UserIdentity string
+	AppPassword  string
+}
+
+type gyokaAPI interface {
+	Ping(context.Context) error
+	AddPost(context.Context, *gyokaschema.FeedAddPost_Input) error
+	BatchAddPosts(context.Context, *gyokaschema.FeedBatchAddPosts_Input) error
+	RemovePost(context.Context, *gyokaschema.FeedRemovePost_Input) error
+	RemovePostByAuthor(context.Context, *gyokaschema.FeedRemovePostByAuthor_Input) error
+	TrimFeed(context.Context, *gyokaschema.FeedTrimFeed_Input) error
+	GetPosts(context.Context, string, string, int64) (*gyokaschema.FeedGetPosts_Output, error)
+}
+
+type atprotoGyokaAPI struct {
+	client *client.Client
+}
+
+func (a *atprotoGyokaAPI) Ping(ctx context.Context) error {
+	_, err := a.client.Ping(ctx)
+	return err
+}
+
+func (a *atprotoGyokaAPI) AddPost(ctx context.Context, input *gyokaschema.FeedAddPost_Input) error {
+	_, err := a.client.AddPost(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) BatchAddPosts(ctx context.Context, input *gyokaschema.FeedBatchAddPosts_Input) error {
+	_, err := a.client.BatchAddPosts(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) RemovePost(ctx context.Context, input *gyokaschema.FeedRemovePost_Input) error {
+	_, err := a.client.RemovePost(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) RemovePostByAuthor(ctx context.Context, input *gyokaschema.FeedRemovePostByAuthor_Input) error {
+	_, err := a.client.RemovePostByAuthor(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) TrimFeed(ctx context.Context, input *gyokaschema.FeedTrimFeed_Input) error {
+	_, err := a.client.TrimFeed(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) GetPosts(ctx context.Context, cursor, feed string, limit int64) (*gyokaschema.FeedGetPosts_Output, error) {
+	return a.client.GetPosts(ctx, cursor, feed, limit)
+}
+
 type feedRequest struct {
 	operation         string
-	AddParams         PostParams
-	BatchAddParams    BatchPostParams
-	DeleteParams      DeleteParams
-	DeleteByDidParams DeleteByDidParams
-	TrimParams        TrimParams
+	addParams         PostParams
+	batchAddParams    BatchPostParams
+	deleteParams      DeleteParams
+	deleteByDidParams DeleteByDidParams
+	trimParams        TrimParams
 }
 
 type GyokaEditor struct {
-	client            *client.ClientWithResponses
+	client            gyokaAPI
 	option            *ClientOption
 	logger            *slog.Logger
 	requestScheduleMu sync.Mutex
 	nextRequestAt     time.Time
 }
 
-type customHeaderTransport struct {
-	customHeaders map[string]string
-	transport     http.RoundTripper
-}
-
-func (c *customHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	for key, value := range c.customHeaders {
-		req.Header.Set(key, value)
-	}
-	if c.transport == nil {
-		c.transport = http.DefaultTransport
-	}
-	return c.transport.RoundTrip(req)
-}
-
 type ClientOptionFunc func(*ClientOption)
 
 type ClientOption struct {
-	headers             map[string]string
-	httpTimeout         time.Duration
-	maxIdleConns        int
-	maxIdleConnsPerHost int
-	idleConnTimeout     time.Duration
-	maxRetries          int
-	retryWaitTime       time.Duration
-	minRequestInterval  time.Duration
-}
-
-// WithHeaders adds arbitrary HTTP headers sent with every request to gyoka.
-// Calling it multiple times merges the given headers with previously added ones.
-func WithHeaders(headers map[string]string) ClientOptionFunc {
-	return func(opt *ClientOption) {
-		for k, v := range headers {
-			opt.headers[k] = v
-		}
-	}
+	maxRetries         int
+	retryWaitTime      time.Duration
+	minRequestInterval time.Duration
 }
 
 func WithRetryWaitTime(retryWaitTime time.Duration) ClientOptionFunc {
-	return func(opt *ClientOption) {
-		opt.retryWaitTime = retryWaitTime
-	}
+	return func(opt *ClientOption) { opt.retryWaitTime = retryWaitTime }
 }
 
 func WithMinRequestInterval(minRequestInterval time.Duration) ClientOptionFunc {
-	return func(opt *ClientOption) {
-		opt.minRequestInterval = minRequestInterval
-	}
+	return func(opt *ClientOption) { opt.minRequestInterval = minRequestInterval }
 }
 
-func NewGyokaEditor(url string, logger *slog.Logger, opts ...ClientOptionFunc) (*GyokaEditor, error) {
+func NewGyokaEditor(ctx context.Context, config ClientConfig, logger *slog.Logger, opts ...ClientOptionFunc) (*GyokaEditor, error) {
+	atprotoClient, err := client.New(ctx, config.Host, config.UserIdentity, config.AppPassword)
+	logger.Info("Creating AT Protocol Gyoka client", "host", config.Host, "userIdentity", config.UserIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("create AT Protocol Gyoka client: %w", err)
+	}
+	return newGyokaEditor(&atprotoGyokaAPI{client: atprotoClient}, logger, opts...), nil
+}
+
+func newGyokaEditor(api gyokaAPI, logger *slog.Logger, opts ...ClientOptionFunc) *GyokaEditor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger = logger.With("component", "gyoka editor")
-	if url == "" {
-		logger.Info("feed editor url is not set. client will skip syncing")
-		return &GyokaEditor{
-			client: nil,
-			option: nil,
-			logger: logger,
-		}, nil
+	option := &ClientOption{
+		maxRetries:         defaultMaxRetries,
+		retryWaitTime:      defaultRetryWaitTime,
+		minRequestInterval: defaultMinRequestInterval,
 	}
-
-	opt := &ClientOption{
-		headers:             make(map[string]string),
-		httpTimeout:         defaultHttpTimeout,
-		maxIdleConns:        defaultMaxIdleConns,
-		maxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
-		idleConnTimeout:     defaultIdleConnTimeout,
-		maxRetries:          defaultMaxRetries,
-		retryWaitTime:       defaultRetryWaitTime,
-		minRequestInterval:  defaultMinRequestInterval,
-	}
-
-	for _, o := range opts {
-		if o != nil {
-			o(opt)
+	for _, optionFunc := range opts {
+		if optionFunc != nil {
+			optionFunc(option)
 		}
 	}
-	ch := opt.headers
-
-	baseTransport := &http.Transport{
-		MaxIdleConns:        opt.maxIdleConns,
-		MaxIdleConnsPerHost: opt.maxIdleConnsPerHost,
-		IdleConnTimeout:     opt.idleConnTimeout,
-		DisableCompression:  false,
-		DisableKeepAlives:   false,
-	}
-
-	hc := &http.Client{
-		Transport: &customHeaderTransport{
-			customHeaders: ch,
-			transport:     baseTransport,
-		},
-		Timeout: opt.httpTimeout,
-	}
-
-	c, err := client.NewClientWithResponses(url, client.WithHTTPClient(hc))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create editor client: %w", err)
-	}
-
-	return &GyokaEditor{
-		client: c,
-		option: opt,
-		logger: logger,
-	}, nil
+	return &GyokaEditor{client: api, option: option, logger: logger.With("component", "gyoka editor")}
 }
 
 func (e *GyokaEditor) Open(ctx context.Context) error {
-	if e.client == nil {
-		return fmt.Errorf("failed to open gyoka. client is nil")
-	}
+	return e.retry(ctx, "ping", func(ctx context.Context) error {
+		return e.client.Ping(ctx)
+	})
+}
 
+func (e *GyokaEditor) retry(ctx context.Context, operation string, request func(context.Context) error) error {
 	var lastErr error
 	for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
 		if attempt > 0 {
-			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
-			e.logger.Info("retrying ping request", "attempt", attempt, "delay", delay)
-			if err := waitForRetry(ctx, delay); err != nil {
+			if err := waitForRetry(ctx, calculateBackoffDelay(attempt, e.option.retryWaitTime)); err != nil {
 				return err
 			}
 		}
-
-		err := e.executePingRequest(ctx)
+		err := classifyGyokaError(request(ctx))
 		if err == nil {
 			return nil
 		}
-
 		lastErr = err
 		if isNonRetryableError(err) {
-			e.logger.Error("ping request failed with non-retryable error", "error", err)
 			return err
 		}
-
 		if attempt < e.option.maxRetries {
-			e.logger.Warn("ping request failed, will retry", "attempt", attempt, "error", err)
+			e.logger.Warn("gyoka request failed, will retry", "operation", operation, "attempt", attempt, "error", err)
 		}
 	}
-
-	e.logger.Error("ping request failed after all retries", "attempts", e.option.maxRetries+1, "error", lastErr)
 	return lastErr
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(delay):
+	case <-timer.C:
 		return nil
 	}
 }
 
-func (e *GyokaEditor) executePingRequest(ctx context.Context) error {
-	resp, err := e.client.GetPing(ctx)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		if isRetryableError(resp.StatusCode) {
-			return fmt.Errorf("retryable error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
-		}
-		return &NonRetryableError{fmt.Errorf("failed to open gyoka (non-retryable): status=%d, body=%s", resp.StatusCode, string(bodyBytes))}
-	}
-
-	var bodyData struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(bodyBytes, &bodyData); err != nil {
-		return &NonRetryableError{fmt.Errorf("failed to parse response body as JSON: %v", err)}
-	}
-	expectedMessage := "Gyoka is available"
-	if bodyData.Message != expectedMessage {
-		return &NonRetryableError{fmt.Errorf("unexpected message: got %q, want %q", bodyData.Message, expectedMessage)}
-	}
-
-	return nil
-}
 func (e *GyokaEditor) processRequest(req *feedRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	var lastErr error
-	for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
-			e.logger.Info("retrying request", "operation", req.operation, "attempt", attempt, "delay", delay)
-			if err := waitForRetry(ctx, delay); err != nil {
-				return err
-			}
-		}
-
+	return e.retry(ctx, req.operation, func(ctx context.Context) error {
 		if err := e.waitForRequestSlot(ctx); err != nil {
 			return err
 		}
-		err := e.executeRequest(ctx, req)
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-		if isNonRetryableError(err) {
-			e.logger.Error("request failed with non-retryable error", "operation", req.operation, "error", err, "params", req)
-			return err
-		}
-
-		if attempt < e.option.maxRetries {
-			e.logger.Warn("request failed, will retry", "operation", req.operation, "attempt", attempt, "error", err, "params", req)
-		}
-	}
-
-	e.logger.Error("request failed after all retries", "operation", req.operation, "attempts", e.option.maxRetries+1, "error", lastErr, "params", req)
-	return lastErr
+		return e.executeRequest(ctx, req)
+	})
 }
 
 func (e *GyokaEditor) waitForRequestSlot(ctx context.Context) error {
 	if e.option.minRequestInterval <= 0 {
 		return nil
 	}
-
 	e.requestScheduleMu.Lock()
 	defer e.requestScheduleMu.Unlock()
-
 	if delay := time.Until(e.nextRequestAt); delay > 0 {
 		if err := waitForRetry(ctx, delay); err != nil {
 			return err
@@ -300,149 +217,75 @@ func (e *GyokaEditor) waitForRequestSlot(ctx context.Context) error {
 func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) error {
 	switch req.operation {
 	case "add":
-		params := req.AddParams
-		uri := "at://" + params.Did + "/app.bsky.feed.post/" + params.Rkey
-		var languages []string
-		if len(params.Langs) == 0 {
-			languages = nil
-		} else {
-			languages = params.Langs
-		}
-		body := client.PostAddPostJSONRequestBody{
-			Feed: string(params.FeedUri),
-			Post: client.AddPostPostParam{
-				Cid:         params.Cid,
-				FeedContext: nil,
-				IndexedAt:   &params.IndexedAt,
-				Languages:   &languages,
-				Reason:      nil,
-				Uri:         uri,
-			},
-		}
-		resp, err := e.client.PostAddPostWithResponse(ctx, body)
-		if err != nil {
-			return err
-		}
-		return e.handleResponse(resp.StatusCode(), resp.Body)
+		return e.client.AddPost(ctx, addPostInput(req.addParams))
 	case "batchAdd":
-		params := req.BatchAddParams
-
-		feedMap := make(map[string][]client.BatchAddPostPostParam)
-		for _, entry := range params.Entries {
-			feedUri := string(entry.FeedUri)
-			uri := "at://" + entry.Did + "/app.bsky.feed.post/" + entry.Rkey
-			var languages []string
-			if len(entry.Langs) == 0 {
-				languages = nil
-			} else {
-				languages = entry.Langs
-			}
-
-			post := client.BatchAddPostPostParam{
-				Cid:         entry.Cid,
-				FeedContext: nil,
-				IndexedAt:   &entry.IndexedAt,
-				Languages:   &languages,
-				Reason:      nil,
-				Uri:         uri,
-			}
-			feedMap[feedUri] = append(feedMap[feedUri], post)
-		}
-
-		entries := make([]struct {
-			Feed  string                         `json:"feed"`
-			Posts []client.BatchAddPostPostParam `json:"posts"`
-		}, 0, len(feedMap))
-
-		for feedUri, posts := range feedMap {
-			entries = append(entries, struct {
-				Feed  string                         `json:"feed"`
-				Posts []client.BatchAddPostPostParam `json:"posts"`
-			}{
-				Feed:  feedUri,
-				Posts: posts,
-			})
-		}
-
-		body := client.PostBatchAddPostsJSONRequestBody{
-			Entries: entries,
-		}
-
-		resp, err := e.client.PostBatchAddPostsWithResponse(ctx, body)
-		if err != nil {
-			return err
-		}
-		return e.handleResponse(resp.StatusCode(), resp.Body)
-
+		return e.client.BatchAddPosts(ctx, batchAddPostsInput(req.batchAddParams))
 	case "delete":
-		params := req.DeleteParams
-		uri := "at://" + params.Did + "/app.bsky.feed.post/" + params.Rkey
-		body := client.PostRemovePostJSONRequestBody{
+		params := req.deleteParams
+		return e.client.RemovePost(ctx, &gyokaschema.FeedRemovePost_Input{
 			Feed: string(params.FeedUri),
-			Post: client.RemovePostPostParam{
-				IndexedAt: nil,
-				Uri:       uri,
-			},
-		}
-		resp, err := e.client.PostRemovePostWithResponse(ctx, body)
-		if err != nil {
-			return err
-		}
-		return e.handleResponse(resp.StatusCode(), resp.Body)
+			Post: &gyokaschema.FeedRemovePost_PostRef{Uri: postURI(params.Did, params.Rkey)},
+		})
 	case "deleteByDid":
-		params := req.DeleteByDidParams
-		body := client.PostRemovePostByAuthorJSONRequestBody{
-			Feed:   string(params.FeedUri),
-			Author: params.Did,
-		}
-		resp, err := e.client.PostRemovePostByAuthorWithResponse(ctx, body)
-		if err != nil {
-			return err
-		}
-		return e.handleResponse(resp.StatusCode(), resp.Body)
+		params := req.deleteByDidParams
+		return e.client.RemovePostByAuthor(ctx, &gyokaschema.FeedRemovePostByAuthor_Input{Feed: string(params.FeedUri), Author: params.Did})
 	case "trim":
-		params := req.TrimParams
-		body := client.PostTrimFeedJSONRequestBody{
-			Feed:   string(params.FeedUri),
-			Remain: params.Count,
-		}
-		resp, err := e.client.PostTrimFeedWithResponse(ctx, body)
-		if err != nil {
-			return err
-		}
-		return e.handleResponse(resp.StatusCode(), resp.Body)
+		params := req.trimParams
+		return e.client.TrimFeed(ctx, &gyokaschema.FeedTrimFeed_Input{Feed: string(params.FeedUri), Remain: int64(params.Count)})
 	default:
 		return fmt.Errorf("unknown operation: %s", req.operation)
 	}
 }
 
-func (e *GyokaEditor) handleResponse(statusCode int, body []byte) error {
-	switch statusCode {
-	case 200:
-		return nil
-	case 400, 401, 404:
-		return &NonRetryableError{fmt.Errorf("request error (non-retryable): %s", string(body))}
-	default:
-		if isRetryableError(statusCode) {
-			if statusCode == http.StatusTooManyRequests {
-				e.logger.Error("gyoka request rate limited", "status", statusCode, "body", string(body))
-			}
-			return fmt.Errorf("retryable error: status=%d, body=%s", statusCode, string(body))
-		}
-		return &NonRetryableError{fmt.Errorf("unexpected request error: status=%d, body=%s", statusCode, string(body))}
+func addPostInput(params PostParams) *gyokaschema.FeedAddPost_Input {
+	indexedAt := params.IndexedAt.UTC().Format(time.RFC3339Nano)
+	return &gyokaschema.FeedAddPost_Input{
+		Feed: string(params.FeedUri),
+		Post: &gyokaschema.FeedAddPost_PostInput{
+			Cid:       params.Cid,
+			IndexedAt: &indexedAt,
+			Languages: params.Langs,
+			Uri:       postURI(params.Did, params.Rkey),
+		},
 	}
 }
 
-type NonRetryableError struct {
-	Err error
+func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedBatchAddPosts_Input {
+	postsByFeed := make(map[string][]*gyokaschema.FeedBatchAddPosts_PostInput)
+	for _, entry := range params.Entries {
+		indexedAt := entry.IndexedAt.UTC().Format(time.RFC3339Nano)
+		postsByFeed[string(entry.FeedUri)] = append(postsByFeed[string(entry.FeedUri)], &gyokaschema.FeedBatchAddPosts_PostInput{
+			Cid:       entry.Cid,
+			IndexedAt: &indexedAt,
+			Languages: entry.Langs,
+			Uri:       postURI(entry.Did, entry.Rkey),
+		})
+	}
+	entries := make([]*gyokaschema.FeedBatchAddPosts_EntryInput, 0, len(postsByFeed))
+	for feed, posts := range postsByFeed {
+		entries = append(entries, &gyokaschema.FeedBatchAddPosts_EntryInput{Feed: feed, Posts: posts})
+	}
+	return &gyokaschema.FeedBatchAddPosts_Input{Entries: entries}
 }
 
-func (e *NonRetryableError) Error() string {
-	return e.Err.Error()
+func postURI(did, rkey string) string {
+	return "at://" + did + "/app.bsky.feed.post/" + rkey
 }
 
-func (e *NonRetryableError) Unwrap() error {
-	return e.Err
+type NonRetryableError struct{ Err error }
+
+func (e *NonRetryableError) Error() string { return e.Err.Error() }
+func (e *NonRetryableError) Unwrap() error { return e.Err }
+
+func classifyGyokaError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) && !isRetryableError(apiErr.StatusCode) {
+		return &NonRetryableError{Err: err}
+	}
+	return err
 }
 
 func isNonRetryableError(err error) bool {
@@ -451,192 +294,67 @@ func isNonRetryableError(err error) bool {
 }
 
 func (e *GyokaEditor) Load(ctx context.Context, params LoadParams) ([]types.Post, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
-	var lastErr error
-	for attempt := 0; attempt <= e.option.maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := calculateBackoffDelay(attempt, e.option.retryWaitTime)
-			e.logger.Info("retrying load request", "attempt", attempt, "delay", delay)
-			if err := waitForRetry(ctx, delay); err != nil {
-				return nil, err
-			}
-		}
-
-		posts, err := e.executeLoadRequest(ctx, params)
-		if err == nil {
-			return posts, nil
-		}
-
-		lastErr = err
-		if isNonRetryableError(err) {
-			e.logger.Error("load request failed with non-retryable error", "error", err)
-			return nil, err
-		}
-
-		if attempt < e.option.maxRetries {
-			e.logger.Warn("load request failed, will retry", "attempt", attempt, "error", err)
-		}
-	}
-
-	e.logger.Error("load request failed after all retries", "attempts", e.option.maxRetries+1, "error", lastErr)
-	return nil, lastErr
-}
-
-func (e *GyokaEditor) executeLoadRequest(ctx context.Context, params LoadParams) ([]types.Post, error) {
-	p := &client.GetGetPostsParams{
-		Feed:   string(params.FeedUri),
-		Limit:  &params.Limit,
-		Cursor: nil,
-	}
-	resp, err := e.client.GetGetPostsWithResponse(ctx, p)
+	var output *gyokaschema.FeedGetPosts_Output
+	err := e.retry(ctx, "get posts", func(ctx context.Context) error {
+		var err error
+		output, err = e.client.GetPosts(ctx, "", string(params.FeedUri), int64(params.Limit))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	switch resp.StatusCode() {
-	case 200:
-		e.logger.Info("load posts from gyoka succeed", "feed", resp.JSON200.Feed, "cursor", resp.JSON200.Cursor)
-		posts := make([]types.Post, len(resp.JSON200.Posts))
-		for i, p := range resp.JSON200.Posts {
-			posts[i] = types.Post{
-				Uri:       types.PostUri(p.Uri),
-				Cid:       p.Cid,
-				IndexedAt: p.IndexedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
-			}
-		}
-		return posts, nil
-	case 400:
-		e.logger.Error("failed to load posts.", "error", resp.JSON400.Error, "message", resp.JSON400.Message)
-		return nil, &NonRetryableError{fmt.Errorf("bad request (non-retryable): %d", resp.StatusCode())}
-	case 401:
-		e.logger.Error("failed to load posts.", "error", resp.JSON401.Error, "message", resp.JSON401.Message)
-		return nil, &NonRetryableError{fmt.Errorf("unauthorized (non-retryable): %d", resp.StatusCode())}
-	case 404:
-		e.logger.Error("failed to load posts. Feed may not be registered in gyoka", "error", resp.JSON404.Error, "message", resp.JSON404.Message)
-		return nil, &NonRetryableError{fmt.Errorf("not found (non-retryable): %d", resp.StatusCode())}
-	default:
-		if isRetryableError(resp.StatusCode()) {
-			if resp.StatusCode() == 500 {
-				e.logger.Error("failed to load posts. Gyoka server has some problem", "error", resp.JSON500.Error, "message", resp.JSON500.Message)
-			}
-			return nil, fmt.Errorf("retryable error: status=%d", resp.StatusCode())
-		}
-		e.logger.Error("unexpected status code from GetGetPosts", "status", resp.StatusCode())
-		return nil, &NonRetryableError{fmt.Errorf("unexpected status code (non-retryable): %d", resp.StatusCode())}
+	posts := make([]types.Post, 0, len(output.Posts))
+	for _, post := range output.Posts {
+		posts = append(posts, types.Post{Uri: types.PostUri(post.Uri), Cid: post.Cid, IndexedAt: post.IndexedAt, Langs: post.Languages})
 	}
+	return posts, nil
 }
 
 func (e *GyokaEditor) Add(params PostParams) error {
-	if e.client == nil {
-		e.logger.Info("no feed editor url is set. add request is skipped.")
-		return fmt.Errorf("no feed editor url is set.add request is skipped")
-	}
 	if err := params.FeedUri.Validate(); err != nil {
-		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	return e.processRequest(&feedRequest{
-		operation: "add",
-		AddParams: params,
-	})
+	return e.processRequest(&feedRequest{operation: "add", addParams: params})
 }
 
 func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
-	if e.client == nil {
-		e.logger.Info("No feed editor url is set. BatchAdd request is skipped.")
+	if len(params.Entries) == 0 {
 		return nil
 	}
-
+	if len(params.Entries) > maxBatchSize {
+		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Entries), maxBatchSize)
+	}
 	for _, entry := range params.Entries {
 		if err := entry.FeedUri.Validate(); err != nil {
-			e.logger.Error("invalid feed uri", "error", err)
 			return fmt.Errorf("invalid feed uri: %w", err)
 		}
 	}
-
-	totalCount := len(params.Entries)
-	if totalCount == 0 {
-		return nil
-	}
-	if totalCount > maxBatchSize {
-		return fmt.Errorf("batch size exceeds limit: %d > %d", totalCount, maxBatchSize)
-	}
-
-	e.logger.Info("processing batch add request", "total_entries", totalCount)
-	err := e.processRequest(&feedRequest{
-		operation:      "batchAdd",
-		BatchAddParams: params,
-	})
-	if err != nil {
-		e.logger.Error("batch request failed", "total_entries", totalCount, "error", err)
-		return err
-	}
-
-	e.logger.Info("batch add completed successfully", "total_entries", totalCount)
-	return nil
+	return e.processRequest(&feedRequest{operation: "batchAdd", batchAddParams: params})
 }
 
 func (e *GyokaEditor) Delete(params DeleteParams) error {
-	if e.client == nil {
-		e.logger.Info("No feed editor url is set. Delete request is skipped.")
-		return nil
-	}
 	if err := params.FeedUri.Validate(); err != nil {
-		e.logger.Error("invalid feed uri", "error", err)
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	return e.processRequest(&feedRequest{
-		operation:    "delete",
-		DeleteParams: params,
-	})
+	return e.processRequest(&feedRequest{operation: "delete", deleteParams: params})
 }
 
-func (e *GyokaEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
-	if e.client == nil {
-		e.logger.Info("No feed editor url is set. DeleteByDid request is skipped.")
-		return nil
-	}
-	if err := feedUri.Validate(); err != nil {
-		e.logger.Error("invalid feed uri", "error", err)
+func (e *GyokaEditor) DeleteByDid(feedURI types.FeedUri, did string) error {
+	if err := feedURI.Validate(); err != nil {
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	return e.processRequest(&feedRequest{
-		operation:         "deleteByDid",
-		DeleteByDidParams: DeleteByDidParams{FeedUri: feedUri, Did: did},
-	})
+	return e.processRequest(&feedRequest{operation: "deleteByDid", deleteByDidParams: DeleteByDidParams{FeedUri: feedURI, Did: did}})
 }
 
 func (e *GyokaEditor) Trim(params TrimParams) error {
-	f := params.FeedUri
-	count := params.Count
-	if e.client == nil {
-		e.logger.Info("No feed editor url is set. Trim request is skipped.")
-		return nil
+	if params.Count < 0 {
+		return fmt.Errorf("invalid count: %d", params.Count)
 	}
-	if count < 0 {
-		e.logger.Error("Invalid argument at Trim", "count", count)
-		return fmt.Errorf("invalid count: %d", count)
-	}
-	if err := f.Validate(); err != nil {
-		e.logger.Error("invalid feed uri", "error", err)
+	if err := params.FeedUri.Validate(); err != nil {
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
-	return e.processRequest(&feedRequest{
-		operation:  "trim",
-		TrimParams: params,
-	})
+	return e.processRequest(&feedRequest{operation: "trim", trimParams: params})
 }
 
-func (e *GyokaEditor) Save(ctx context.Context, params SaveParams) error {
-	return nil
-}
-
-func (e *GyokaEditor) Close(ctx context.Context) error {
-	_ = ctx
-	return nil
-}
+func (e *GyokaEditor) Save(context.Context, SaveParams) error { return nil }
+func (e *GyokaEditor) Close(context.Context) error            { return nil }

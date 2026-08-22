@@ -36,24 +36,6 @@ func run(args []string) {
 						EnvVars: []string{"LOG_LEVEL"},
 					},
 					&cli.StringFlag{
-						Name:     "feed-editor-endpoint",
-						Usage:    "endpoint url for gyoka editor",
-						EnvVars:  []string{"FEED_EDITOR_ENDPOINT"},
-						Required: false,
-					},
-					&cli.StringSliceFlag{
-						Name:    "feed-editor-header",
-						Aliases: []string{"H"},
-						Usage:   "extra HTTP header sent with gyoka projection requests, format 'Key: Value' (repeatable)",
-						EnvVars: []string{"FEED_EDITOR_HEADERS"},
-					},
-					&cli.IntFlag{
-						Name:    "gyoka-min-request-interval-ms",
-						Usage:   "minimum interval between Gyoka projection requests in milliseconds",
-						Value:   1000,
-						EnvVars: []string{"GYOKA_MIN_REQUEST_INTERVAL_MS"},
-					},
-					&cli.StringFlag{
 						Name:    "jetstream-url",
 						Usage:   "full websocket path to the jetstream endpoint",
 						Value:   "ws://localhost:6009/subscribe",

@@ -1,31 +1,17 @@
 package subscriber
 
 import (
-	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/urfave/cli/v2"
 )
 
-func TestGyokaMinRequestInterval_ConvertsMilliseconds(t *testing.T) {
-	flagSet := flag.NewFlagSet(t.Name(), flag.ContinueOnError)
-	flagSet.Int("gyoka-min-request-interval-ms", 500, "")
-	ctx := cli.NewContext(nil, flagSet, nil)
-
-	if got := gyokaMinRequestInterval(ctx); got != 500*time.Millisecond {
-		t.Fatalf("gyokaMinRequestInterval() = %v, want %v", got, 500*time.Millisecond)
-	}
-}
-
 func TestRegisterFeedRoutes_AcceptsPostAndPut(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		t.Run(method, func(t *testing.T) {

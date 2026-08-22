@@ -29,8 +29,8 @@ type gyokaProjectionRuntime struct {
 	editor *gyoka.GyokaEditor
 }
 
-func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger, db *sql.DB, endpoint string, opts gyokaProjectionRuntimeOptions) (*gyokaProjectionRuntime, error) {
-	if endpoint == "" {
+func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger, db *sql.DB, config gyoka.ClientConfig, opts gyokaProjectionRuntimeOptions) (*gyokaProjectionRuntime, error) {
+	if config.Host == "" {
 		return nil, nil
 	}
 	if logger == nil {
@@ -44,7 +44,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	if metricsInterval <= 0 {
 		metricsInterval = defaultProjectionMetricsInterval
 	}
-	gyokaEditor, err := gyoka.NewGyokaEditor(endpoint, logger, opts.clientOptions...)
+	gyokaEditor, err := gyoka.NewGyokaEditor(parentCtx, config, logger, opts.clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create gyoka editor: %w", err)
 	}

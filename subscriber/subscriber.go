@@ -41,10 +41,6 @@ func getLogLevel(level string) slog.Level {
 	}
 }
 
-func gyokaMinRequestInterval(cctx *cli.Context) time.Duration {
-	return time.Duration(cctx.Int("gyoka-min-request-interval-ms")) * time.Millisecond
-}
-
 func JetstreamSubscriber(cctx *cli.Context) error {
 	ctx := cctx.Context
 	//// Prepare
@@ -61,9 +57,11 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse jetstream-url: %w", err)
 	}
 
-	if cctx.String("feed-editor-endpoint") != "" {
-		logger.Info("configuring gyoka projection runtime", "endpoint", cctx.String("feed-editor-endpoint"))
+	gyokaConfig, err := loadGyokaProjectionConfig(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"))
+	if err != nil {
+		return fmt.Errorf("load Gyoka projection configuration: %w", err)
 	}
+	logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity)
 
 	// setup feed service
 	var fs *FeedService
@@ -81,15 +79,9 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
 	}
-	var projectionClientOptions []gyoka.ClientOptionFunc
-	headers, err := parseHeaderFlags(cctx.StringSlice("feed-editor-header"))
-	if err != nil {
-		return fmt.Errorf("invalid feed-editor-header: %w", err)
+	projectionClientOptions := []gyoka.ClientOptionFunc{
+		gyoka.WithMinRequestInterval(time.Duration(gyokaConfig.minRequestIntervalMS) * time.Millisecond),
 	}
-	if len(headers) > 0 {
-		projectionClientOptions = append(projectionClientOptions, gyoka.WithHeaders(headers))
-	}
-	projectionClientOptions = append(projectionClientOptions, gyoka.WithMinRequestInterval(gyokaMinRequestInterval(cctx)))
 	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
 	if err != nil {
 		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)
@@ -118,15 +110,17 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			logger.Error("failed to close sqlite runtime persistence", "error", err)
 		}
 	}()
-	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, cctx.String("feed-editor-endpoint"), gyokaProjectionRuntimeOptions{
+	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, gyoka.ClientConfig{
+		Host:         gyokaConfig.host,
+		UserIdentity: gyokaConfig.userIdentity,
+		AppPassword:  gyokaConfig.appPassword,
+	}, gyokaProjectionRuntimeOptions{
 		clientOptions: projectionClientOptions,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start gyoka projection runtime: %w", err)
 	}
-	if projectionRuntime == nil {
-		logger.Info("gyoka projection runtime disabled: no feed editor endpoint configured")
-	} else {
+	if projectionRuntime != nil {
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
