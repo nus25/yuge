@@ -12,9 +12,10 @@ import (
 )
 
 type fakeGyokaAPI struct {
-	pingErr       error
-	addInput      *gyokaschema.FeedAddPost_Input
-	batchAddInput *gyokaschema.FeedBatchAddPosts_Input
+	pingErr          error
+	addInput         *gyokaschema.FeedAddPost_Input
+	batchAddInput    *gyokaschema.FeedBatchAddPosts_Input
+	batchRemoveInput *gyokaschema.FeedBatchRemovePosts_Input
 }
 
 func (a *fakeGyokaAPI) Ping(context.Context) error { return a.pingErr }
@@ -26,6 +27,11 @@ func (a *fakeGyokaAPI) AddPost(_ context.Context, input *gyokaschema.FeedAddPost
 
 func (a *fakeGyokaAPI) BatchAddPosts(_ context.Context, input *gyokaschema.FeedBatchAddPosts_Input) error {
 	a.batchAddInput = input
+	return nil
+}
+
+func (a *fakeGyokaAPI) BatchRemovePosts(_ context.Context, input *gyokaschema.FeedBatchRemovePosts_Input) error {
+	a.batchRemoveInput = input
 	return nil
 }
 
@@ -102,5 +108,45 @@ func TestGyokaEditor_BatchAddRejectsOversizedBatch(t *testing.T) {
 	entries := make([]PostParams, maxBatchSize+1)
 	if err := newGyokaEditor(&fakeGyokaAPI{}, nil).BatchAdd(BatchPostParams{Entries: entries}); err == nil {
 		t.Fatal("BatchAdd() error = nil, want batch size error")
+	}
+}
+
+func TestGyokaEditor_BatchRemoveMapsATProtoLexiconInput(t *testing.T) {
+	api := &fakeGyokaAPI{}
+	editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
+
+	if err := editor.BatchRemove(BatchDeleteParams{Entries: []DeleteParams{
+		{
+			FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+			Did:     "did:plc:author1",
+			Rkey:    "post-1",
+		},
+		{
+			FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+			Did:     "did:plc:author2",
+			Rkey:    "post-2",
+		},
+	}}); err != nil {
+		t.Fatalf("BatchRemove() error = %v", err)
+	}
+
+	if api.batchRemoveInput == nil {
+		t.Fatal("BatchRemovePosts() input is nil")
+	}
+	if len(api.batchRemoveInput.Entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(api.batchRemoveInput.Entries))
+	}
+	entry := api.batchRemoveInput.Entries[0]
+	if entry.Feed != "at://did:plc:feed/app.bsky.feed.generator/sample" {
+		t.Errorf("feed = %q", entry.Feed)
+	}
+	if len(entry.Posts) != 2 {
+		t.Fatalf("posts len = %d, want 2", len(entry.Posts))
+	}
+	if entry.Posts[0].Uri != "at://did:plc:author1/app.bsky.feed.post/post-1" {
+		t.Errorf("first post URI = %q", entry.Posts[0].Uri)
+	}
+	if entry.Posts[1].Uri != "at://did:plc:author2/app.bsky.feed.post/post-2" {
+		t.Errorf("second post URI = %q", entry.Posts[1].Uri)
 	}
 }

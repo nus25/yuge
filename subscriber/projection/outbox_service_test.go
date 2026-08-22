@@ -370,6 +370,63 @@ func TestOutboxService_ProcessNextPending_BatchesContiguousAdds(t *testing.T) {
 	}
 }
 
+func TestOutboxService_ProcessNextPending_BatchesContiguousDeletes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "outbox-service-delete-batch.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	for index := 0; index < 2; index++ {
+		if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+			FeedID:      "feed-1",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/sample",
+			Target:      "gyoka",
+			Operation:   "delete",
+			MutationID:  "m-1",
+			SubjectKey:  "feed-1:post-" + string(rune('1'+index)),
+			OpKey:       "m-1:delete:post-" + string(rune('1'+index)),
+			PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+			Status:      "pending",
+		}); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+	}
+
+	projector := &spyBatchEntryProjector{}
+	service := NewOutboxService("gyoka", repo, projector)
+
+	result, err := service.ProcessNextPendingStep(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNextPendingStep() error = %v", err)
+	}
+	if result.EntryCount != 2 {
+		t.Fatalf("EntryCount = %d, want 2", result.EntryCount)
+	}
+	if projector.batchCalls != 1 {
+		t.Fatalf("ProjectBatch() calls = %d, want 1", projector.batchCalls)
+	}
+	if projector.projectCalls != 0 {
+		t.Fatalf("Project() calls = %d, want 0", projector.projectCalls)
+	}
+	if len(projector.batchProjected) != 2 {
+		t.Fatalf("batched entries len = %d, want 2", len(projector.batchProjected))
+	}
+}
+
 func TestOutboxService_ProcessNextPending_BatchFailureLeavesManualFailedEntries(t *testing.T) {
 	t.Parallel()
 

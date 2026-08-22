@@ -20,6 +20,7 @@ type GyokaMutator interface {
 	Add(params gyoka.PostParams) error
 	BatchAdd(params gyoka.BatchPostParams) error
 	Delete(params gyoka.DeleteParams) error
+	BatchRemove(params gyoka.BatchDeleteParams) error
 	Trim(params gyoka.TrimParams) error
 }
 
@@ -122,9 +123,11 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 		return p.Project(ctx, entries[0])
 	}
 
-	batchEntries := make([]gyoka.PostParams, 0, len(entries))
+	operation := entries[0].Operation
+	batchAddEntries := make([]gyoka.PostParams, 0, len(entries))
+	batchDeleteEntries := make([]gyoka.DeleteParams, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Operation != "add" {
+		if entry.Operation != operation || (operation != "add" && operation != "delete") {
 			return markNonRetryableProjection(fmt.Errorf("%w: %s", ErrUnsupportedProjectionOperation, entry.Operation))
 		}
 		var payload projectionPayload
@@ -135,11 +138,19 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected post uri: %w", err))
 		}
+		if operation == "delete" {
+			batchDeleteEntries = append(batchDeleteEntries, gyoka.DeleteParams{
+				FeedUri: payload.FeedURI,
+				Did:     parsedURI.Did,
+				Rkey:    parsedURI.Rkey,
+			})
+			continue
+		}
 		indexedAt, err := time.Parse(time.RFC3339Nano, payload.Post.IndexedAt)
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
-		batchEntries = append(batchEntries, gyoka.PostParams{
+		batchAddEntries = append(batchAddEntries, gyoka.PostParams{
 			FeedUri:   payload.FeedURI,
 			Did:       parsedURI.Did,
 			Rkey:      parsedURI.Rkey,
@@ -148,7 +159,13 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 			Langs:     payload.Post.Langs,
 		})
 	}
-	if err := p.mutator.BatchAdd(gyoka.BatchPostParams{Entries: batchEntries}); err != nil {
+	if operation == "delete" {
+		if err := p.mutator.BatchRemove(gyoka.BatchDeleteParams{Entries: batchDeleteEntries}); err != nil {
+			return fmt.Errorf("project delete batch: %w", err)
+		}
+		return nil
+	}
+	if err := p.mutator.BatchAdd(gyoka.BatchPostParams{Entries: batchAddEntries}); err != nil {
 		return fmt.Errorf("project add batch: %w", err)
 	}
 	return nil

@@ -37,6 +37,10 @@ type DeleteParams struct {
 	Rkey    string
 }
 
+type BatchDeleteParams struct {
+	Entries []DeleteParams
+}
+
 type DeleteByDidParams struct {
 	FeedUri types.FeedUri
 	Did     string

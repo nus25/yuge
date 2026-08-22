@@ -45,6 +45,7 @@ type gyokaAPI interface {
 	Ping(context.Context) error
 	AddPost(context.Context, *gyokaschema.FeedAddPost_Input) error
 	BatchAddPosts(context.Context, *gyokaschema.FeedBatchAddPosts_Input) error
+	BatchRemovePosts(context.Context, *gyokaschema.FeedBatchRemovePosts_Input) error
 	RemovePost(context.Context, *gyokaschema.FeedRemovePost_Input) error
 	RemovePostByAuthor(context.Context, *gyokaschema.FeedRemovePostByAuthor_Input) error
 	TrimFeed(context.Context, *gyokaschema.FeedTrimFeed_Input) error
@@ -67,6 +68,11 @@ func (a *atprotoGyokaAPI) AddPost(ctx context.Context, input *gyokaschema.FeedAd
 
 func (a *atprotoGyokaAPI) BatchAddPosts(ctx context.Context, input *gyokaschema.FeedBatchAddPosts_Input) error {
 	_, err := a.client.BatchAddPosts(ctx, input)
+	return err
+}
+
+func (a *atprotoGyokaAPI) BatchRemovePosts(ctx context.Context, input *gyokaschema.FeedBatchRemovePosts_Input) error {
+	_, err := a.client.BatchRemovePosts(ctx, input)
 	return err
 }
 
@@ -93,6 +99,7 @@ type feedRequest struct {
 	operation         string
 	addParams         PostParams
 	batchAddParams    BatchPostParams
+	batchDeleteParams BatchDeleteParams
 	deleteParams      DeleteParams
 	deleteByDidParams DeleteByDidParams
 	trimParams        TrimParams
@@ -223,6 +230,8 @@ func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) erro
 		return e.client.AddPost(ctx, addPostInput(req.addParams))
 	case "batchAdd":
 		return e.client.BatchAddPosts(ctx, batchAddPostsInput(req.batchAddParams))
+	case "batchRemove":
+		return e.client.BatchRemovePosts(ctx, batchRemovePostsInput(req.batchDeleteParams))
 	case "delete":
 		params := req.deleteParams
 		return e.client.RemovePost(ctx, &gyokaschema.FeedRemovePost_Input{
@@ -269,6 +278,20 @@ func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedBatchAddPosts_I
 		entries = append(entries, &gyokaschema.FeedBatchAddPosts_EntryInput{Feed: feed, Posts: posts})
 	}
 	return &gyokaschema.FeedBatchAddPosts_Input{Entries: entries}
+}
+
+func batchRemovePostsInput(params BatchDeleteParams) *gyokaschema.FeedBatchRemovePosts_Input {
+	postsByFeed := make(map[string][]*gyokaschema.FeedBatchRemovePosts_PostInput)
+	for _, entry := range params.Entries {
+		postsByFeed[string(entry.FeedUri)] = append(postsByFeed[string(entry.FeedUri)], &gyokaschema.FeedBatchRemovePosts_PostInput{
+			Uri: postURI(entry.Did, entry.Rkey),
+		})
+	}
+	entries := make([]*gyokaschema.FeedBatchRemovePosts_EntryInput, 0, len(postsByFeed))
+	for feed, posts := range postsByFeed {
+		entries = append(entries, &gyokaschema.FeedBatchRemovePosts_EntryInput{Feed: feed, Posts: posts})
+	}
+	return &gyokaschema.FeedBatchRemovePosts_Input{Entries: entries}
 }
 
 func postURI(did, rkey string) string {
@@ -333,6 +356,21 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 		}
 	}
 	return e.processRequest(&feedRequest{operation: "batchAdd", batchAddParams: params})
+}
+
+func (e *GyokaEditor) BatchRemove(params BatchDeleteParams) error {
+	if len(params.Entries) == 0 {
+		return nil
+	}
+	if len(params.Entries) > maxBatchSize {
+		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Entries), maxBatchSize)
+	}
+	for _, entry := range params.Entries {
+		if err := entry.FeedUri.Validate(); err != nil {
+			return fmt.Errorf("invalid feed uri: %w", err)
+		}
+	}
+	return e.processRequest(&feedRequest{operation: "batchRemove", batchDeleteParams: params})
 }
 
 func (e *GyokaEditor) Delete(params DeleteParams) error {

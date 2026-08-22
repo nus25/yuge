@@ -13,18 +13,21 @@ import (
 )
 
 type spyGyokaMutator struct {
-	addErr      error
-	batchAddErr error
-	deleteErr   error
-	trimErr     error
-	addCalls    int
-	batchCalls  int
-	deleteCalls int
-	trimCalls   int
-	lastAdd     gyoka.PostParams
-	lastBatch   gyoka.BatchPostParams
-	lastDelete  gyoka.DeleteParams
-	lastTrim    gyoka.TrimParams
+	addErr           error
+	batchAddErr      error
+	batchRemoveErr   error
+	deleteErr        error
+	trimErr          error
+	addCalls         int
+	batchCalls       int
+	batchRemoveCalls int
+	deleteCalls      int
+	trimCalls        int
+	lastAdd          gyoka.PostParams
+	lastBatch        gyoka.BatchPostParams
+	lastBatchRemove  gyoka.BatchDeleteParams
+	lastDelete       gyoka.DeleteParams
+	lastTrim         gyoka.TrimParams
 }
 
 func (m *spyGyokaMutator) Add(params gyoka.PostParams) error {
@@ -37,6 +40,12 @@ func (m *spyGyokaMutator) BatchAdd(params gyoka.BatchPostParams) error {
 	m.batchCalls++
 	m.lastBatch = params
 	return m.batchAddErr
+}
+
+func (m *spyGyokaMutator) BatchRemove(params gyoka.BatchDeleteParams) error {
+	m.batchRemoveCalls++
+	m.lastBatchRemove = params
+	return m.batchRemoveErr
 }
 
 func (m *spyGyokaMutator) Delete(params gyoka.DeleteParams) error {
@@ -193,5 +202,42 @@ func TestGyokaProjector_ProjectBatch_AddEntries(t *testing.T) {
 	}
 	if mutator.lastBatch.Entries[0].Did != "did:plc:user1" || mutator.lastBatch.Entries[1].Did != "did:plc:user2" {
 		t.Fatalf("BatchAdd() entries = %+v", mutator.lastBatch.Entries)
+	}
+}
+
+func TestGyokaProjector_ProjectBatch_DeleteEntries(t *testing.T) {
+	t.Parallel()
+
+	mutator := &spyGyokaMutator{}
+	projector := NewGyokaProjector(mutator)
+	entries := []projectionrepo.Entry{
+		{
+			ID:          1,
+			Target:      "gyoka",
+			Operation:   "delete",
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}}`,
+		},
+		{
+			ID:          2,
+			Target:      "gyoka",
+			Operation:   "delete",
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user2/app.bsky.feed.post/post2"}}`,
+		},
+	}
+
+	if err := projector.ProjectBatch(context.Background(), entries); err != nil {
+		t.Fatalf("ProjectBatch() error = %v", err)
+	}
+	if mutator.batchRemoveCalls != 1 {
+		t.Fatalf("BatchRemove() calls = %d, want 1", mutator.batchRemoveCalls)
+	}
+	if mutator.deleteCalls != 0 {
+		t.Fatalf("Delete() calls = %d, want 0", mutator.deleteCalls)
+	}
+	if len(mutator.lastBatchRemove.Entries) != 2 {
+		t.Fatalf("BatchRemove() entries len = %d, want 2", len(mutator.lastBatchRemove.Entries))
+	}
+	if mutator.lastBatchRemove.Entries[0].Did != "did:plc:user1" || mutator.lastBatchRemove.Entries[1].Rkey != "post2" {
+		t.Fatalf("BatchRemove() entries = %+v", mutator.lastBatchRemove.Entries)
 	}
 }

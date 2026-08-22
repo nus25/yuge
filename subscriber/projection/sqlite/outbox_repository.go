@@ -255,9 +255,9 @@ func (r *OutboxRepository) ClaimNextPendingBatch(ctx context.Context, params pro
 
 	claimedEntries := make([]projectionrepo.Entry, 0, len(entries))
 	claimedEntries = append(claimedEntries, entries[0])
-	if entries[0].Operation == "add" {
+	if entries[0].Operation == "add" || entries[0].Operation == "delete" {
 		for _, entry := range entries[1:] {
-			if entry.Operation != "add" {
+			if entry.Operation != entries[0].Operation {
 				break
 			}
 			claimedEntries = append(claimedEntries, entry)
