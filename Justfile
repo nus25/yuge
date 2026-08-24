@@ -19,7 +19,7 @@ sbsc-run:
     @echo "Running yuge subscriber..."
     {{ subscriber-run-go-cmd }} run ./cmd/yuge_subscriber/... run
 
-sbsc-build-amd64:
+sbsc-build-image-amd64:
     @echo "Building yuge subscriber docker image for amd64..."
     docker buildx build --platform linux/amd64 -f build/Dockerfile.subscriber -t yuge-subscriber:{{ yuge-subscriber-version }}-amd64 --load .
 
