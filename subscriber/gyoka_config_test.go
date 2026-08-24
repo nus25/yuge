@@ -89,3 +89,32 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadGyokaProjectionConfigForStartup(t *testing.T) {
+	configDir := t.TempDir()
+
+	config, enabled, err := loadGyokaProjectionConfigForStartup(configDir, "app-password")
+	if !errors.Is(err, ErrGyokaConfigNotFound) {
+		t.Fatalf("loadGyokaProjectionConfigForStartup() error = %v, want %v", err, ErrGyokaConfigNotFound)
+	}
+	if enabled {
+		t.Fatal("loadGyokaProjectionConfigForStartup() enabled = true, want false")
+	}
+	if config != (gyokaProjectionConfig{}) {
+		t.Fatalf("loadGyokaProjectionConfigForStartup() config = %+v, want empty config", config)
+	}
+
+	if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte("host: gyoka.example.com\nuserIdentity: yuge.bsky.social\n"), 0600); err != nil {
+		t.Fatalf("write gyoka config: %v", err)
+	}
+	config, enabled, err = loadGyokaProjectionConfigForStartup(configDir, "app-password")
+	if err != nil {
+		t.Fatalf("loadGyokaProjectionConfigForStartup() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("loadGyokaProjectionConfigForStartup() enabled = false, want true")
+	}
+	if config.host != "gyoka.example.com" {
+		t.Errorf("host = %q, want %q", config.host, "gyoka.example.com")
+	}
+}

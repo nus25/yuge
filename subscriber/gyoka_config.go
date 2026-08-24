@@ -67,3 +67,11 @@ func loadGyokaProjectionConfig(configDirectory, appPassword string) (gyokaProjec
 		minRequestIntervalMS: fileConfig.MinRequestIntervalMS,
 	}, nil
 }
+
+func loadGyokaProjectionConfigForStartup(configDirectory, appPassword string) (gyokaProjectionConfig, bool, error) {
+	config, err := loadGyokaProjectionConfig(configDirectory, appPassword)
+	if err != nil {
+		return gyokaProjectionConfig{}, false, err
+	}
+	return config, true, nil
+}
