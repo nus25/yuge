@@ -187,7 +187,8 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 		return err
 	})
 
-	con.SetPongHandler(func(_ string) error {
+	con.SetPongHandler(func(message string) error {
+		c.logger.Debug("received pong from server, resetting read deadline", "message", message)
 		if err := c.con.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
 			return fmt.Errorf("failed to set read deadline: %s", err)
 		}

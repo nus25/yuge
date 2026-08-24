@@ -53,7 +53,7 @@ func (h *Handler) HandleJetstream(ctx context.Context, log *slog.Logger, cursor 
 		for {
 			select {
 			case <-t.C:
-				log.Info("send ping to jetstream.")
+				log.Debug("send ping to jetstream.")
 				if h.Jsc != nil {
 					if err := h.Jsc.SendPing(); err != nil {
 						log.Warn("failed to ping", "error", err)
