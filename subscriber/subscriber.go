@@ -189,7 +189,11 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	apiServer := &http.Server{
 		Addr: cctx.String("api-listen-addr"),
 		Handler: func() http.Handler {
-			r := gin.Default()
+			r := gin.New()
+			r.Use(
+				gin.Recovery(),
+				requestLogger(logger.With("component", "APIServer")),
+			)
 			feedAPI := NewFeedApiHandler(fs)
 			feedAPI.MutationCoordinator = sqlitePersistence.mutationCoordinator
 			feedAPI.ProjectionOutbox = projectionsqlite.NewOutboxRepository(sqlitePersistence.loaderDB)
