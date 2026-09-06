@@ -2,6 +2,7 @@ package subscriber
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nus25/yuge/feed"
@@ -62,4 +63,24 @@ func (s Status) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+func (s *Status) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch value {
+	case "active":
+		*s = FeedStatusActive
+	case "inactive":
+		*s = FeedStatusInactive
+	case "error":
+		*s = FeedStatusError
+	case "unknown":
+		*s = FeedStatusUnknown
+	default:
+		return fmt.Errorf("invalid feed status: %s", value)
+	}
+	return nil
 }

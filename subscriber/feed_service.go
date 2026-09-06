@@ -2,10 +2,12 @@ package subscriber
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -16,6 +18,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const runtimeStatusFilename = "status.json"
+
+type runtimeFeedState struct {
+	Definition FeedDefinition `json:"definition"`
+	Status     FeedStatus     `json:"status"`
+}
+
+type runtimeFeedSnapshot struct {
+	Feeds []runtimeFeedState `json:"feeds"`
+}
+
 type FeedService struct {
 	definitionProvider  FeedDefinitionProvider
 	configDir           string
@@ -25,6 +38,7 @@ type FeedService struct {
 	feeds               map[string]FeedInfo
 	logger              *slog.Logger
 	mu                  sync.RWMutex
+	statusMu            sync.Mutex
 	feedOpMu            sync.Mutex
 	feedOpLocks         map[string]*sync.Mutex
 }
@@ -92,12 +106,26 @@ func (s *FeedService) SetMutationCoordinator(coordinator PostMutationCoordinator
 }
 
 func (s *FeedService) LoadFeeds(ctx context.Context) error {
-	if s.definitionProvider == nil {
-		return fmt.Errorf("feed definition provider is nil")
-	}
-	fdl, err := s.definitionProvider.GetFeedDefinitionList()
+	snapshot, found, err := s.loadRuntimeSnapshot()
 	if err != nil {
-		return fmt.Errorf("failed to get feed definition list: %w", err)
+		return err
+	}
+	if !found {
+		if s.definitionProvider == nil {
+			return fmt.Errorf("feed definition provider is nil")
+		}
+		fdl, err := s.definitionProvider.GetFeedDefinitionList()
+		if err != nil {
+			return fmt.Errorf("failed to get feed definition list: %w", err)
+		}
+		snapshot.Feeds = make([]runtimeFeedState, 0, len(fdl.Feeds))
+		for _, def := range fdl.Feeds {
+			status := FeedStatusActive
+			if def.InactiveStart == "true" {
+				status = FeedStatusInactive
+			}
+			snapshot.Feeds = append(snapshot.Feeds, runtimeFeedState{Definition: def, Status: FeedStatus{FeedID: def.ID, LastStatus: status, LastUpdated: time.Now()}})
+		}
 	}
 
 	s.mu.RLock()
@@ -110,9 +138,10 @@ func (s *FeedService) LoadFeeds(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(10) // Limit the number of concurrent executions
 
-	for _, f := range fdl.Feeds {
-		def := f // capture loop variable
+	for _, state := range snapshot.Feeds {
+		state := state
 		g.Go(func() error {
+			def := state.Definition
 			_, exists := s.GetFeedInfo(def.ID)
 
 			if exists {
@@ -123,10 +152,8 @@ func (s *FeedService) LoadFeeds(ctx context.Context) error {
 					return fmt.Errorf("failed to update feed %s: %w", def.ID, err)
 				}
 			} else {
-				var initialStatus Status
-				if def.InactiveStart == "true" {
-					initialStatus = FeedStatusInactive
-				} else {
+				initialStatus := state.Status.LastStatus
+				if initialStatus == FeedStatusError || initialStatus == FeedStatusUnknown {
 					initialStatus = FeedStatusActive
 				}
 				if err := s.CreateFeed(ctx, def, initialStatus); err != nil {
@@ -154,7 +181,7 @@ func (s *FeedService) LoadFeeds(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return s.saveRuntimeSnapshot()
 }
 
 func (s *FeedService) ReloadFeed(ctx context.Context, feedId string) error {
@@ -172,11 +199,7 @@ func (s *FeedService) reloadFeed(ctx context.Context, feedId string) error {
 		return fmt.Errorf("feed %s not found", feedId)
 	}
 
-	// read feed definition list
-	def, err := s.definitionProvider.GetFeedDefinition(feedId)
-	if err != nil {
-		return fmt.Errorf("failed to get feed definition: %w", err)
-	}
+	def := fi.Definition
 
 	// shutdown existing feed
 	if fi.Feed != nil {
@@ -201,7 +224,13 @@ func (s *FeedService) reloadFeed(ctx context.Context, feedId string) error {
 
 	// create new feed
 	if err := s.createFeed(ctx, def, newStatus); err != nil {
+		if saveErr := s.saveRuntimeSnapshot(); saveErr != nil {
+			return fmt.Errorf("failed to create new feed: %w; save runtime status: %v", err, saveErr)
+		}
 		return fmt.Errorf("failed to create new feed: %w", err)
+	}
+	if err := s.saveRuntimeSnapshot(); err != nil {
+		return fmt.Errorf("save runtime status: %w", err)
 	}
 
 	s.logger.Info("feed reloaded successfully", "feedId", feedId)
@@ -279,7 +308,15 @@ func (s *FeedService) Shutdown(ctx context.Context) error {
 
 func (s *FeedService) CreateFeed(ctx context.Context, def FeedDefinition, status Status) (err error) {
 	return s.withFeedOperationLock(def.ID, func() error {
-		return s.createFeed(ctx, def, status)
+		createErr := s.createFeed(ctx, def, status)
+		saveErr := s.saveRuntimeSnapshot()
+		if createErr != nil {
+			if saveErr != nil {
+				return fmt.Errorf("create feed: %w; save runtime status: %v", createErr, saveErr)
+			}
+			return createErr
+		}
+		return saveErr
 	})
 }
 
@@ -375,15 +412,7 @@ func (s *FeedService) deleteFeed(feedId string) error {
 	// delete from service
 	s.unregisterFeed(feedId)
 
-	// delete from definition provider
-	if s.definitionProvider != nil {
-		if err := s.definitionProvider.DeleteFeedDefinition(feedId); err != nil {
-			s.logger.Error("failed to delete feed definition", "feedId", feedId, "error", err)
-			return fmt.Errorf("failed to delete feed definition: %w", err)
-		}
-	}
-
-	return nil
+	return s.saveRuntimeSnapshot()
 }
 
 func (s *FeedService) registerFeed(def FeedDefinition, feed feed.Feed, status FeedStatus) {
@@ -406,16 +435,87 @@ func (s *FeedService) unregisterFeed(feedId string) {
 
 func (s *FeedService) UpdateStatus(feedId string, status Status) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	fi, exists := s.feeds[feedId]
 	if !exists {
+		s.mu.Unlock()
 		return fmt.Errorf("feed not found: %s", feedId)
 	}
 	fi.Status.LastStatus = status
 	fi.Status.LastUpdated = time.Now()
 	s.feeds[feedId] = fi
+	s.mu.Unlock()
+	if err := s.saveRuntimeSnapshot(); err != nil {
+		return fmt.Errorf("save runtime status: %w", err)
+	}
 	s.logger.Info("feed status updated", "feedId", feedId, "status", fi.Status.LastStatus)
+	return nil
+}
+
+func (s *FeedService) UpdateFeed(ctx context.Context, def FeedDefinition, status Status) error {
+	return s.withFeedOperationLock(def.ID, func() error {
+		fi, exists := s.GetFeedInfo(def.ID)
+		if !exists {
+			return fmt.Errorf("feed %s not found", def.ID)
+		}
+		if fi.Feed != nil {
+			if err := fi.Feed.Shutdown(ctx); err != nil {
+				s.logger.Error("failed to shutdown existing feed", "feedId", def.ID, "error", err)
+			}
+		}
+		s.unregisterFeed(def.ID)
+		createErr := s.createFeed(ctx, def, status)
+		saveErr := s.saveRuntimeSnapshot()
+		if createErr != nil {
+			if saveErr != nil {
+				return fmt.Errorf("create updated feed: %w; save runtime status: %v", createErr, saveErr)
+			}
+			return fmt.Errorf("create updated feed: %w", createErr)
+		}
+		return saveErr
+	})
+}
+
+func (s *FeedService) runtimeStatusPath() string {
+	return filepath.Join(s.dataDir, runtimeStatusFilename)
+}
+
+func (s *FeedService) loadRuntimeSnapshot() (runtimeFeedSnapshot, bool, error) {
+	data, err := os.ReadFile(s.runtimeStatusPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return runtimeFeedSnapshot{}, false, nil
+		}
+		return runtimeFeedSnapshot{}, false, fmt.Errorf("read runtime status: %w", err)
+	}
+	var snapshot runtimeFeedSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return runtimeFeedSnapshot{}, false, fmt.Errorf("parse runtime status: %w", err)
+	}
+	return snapshot, true, nil
+}
+
+func (s *FeedService) saveRuntimeSnapshot() error {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.mu.RLock()
+	snapshot := runtimeFeedSnapshot{Feeds: make([]runtimeFeedState, 0, len(s.feeds))}
+	for _, info := range s.feeds {
+		snapshot.Feeds = append(snapshot.Feeds, runtimeFeedState{Definition: info.Definition, Status: info.Status})
+	}
+	s.mu.RUnlock()
+	sort.Slice(snapshot.Feeds, func(i, j int) bool { return snapshot.Feeds[i].Definition.ID < snapshot.Feeds[j].Definition.ID })
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("marshal runtime status: %w", err)
+	}
+	temporaryPath := s.runtimeStatusPath() + ".tmp"
+	if err := os.WriteFile(temporaryPath, data, 0644); err != nil {
+		return fmt.Errorf("write runtime status: %w", err)
+	}
+	if err := os.Rename(temporaryPath, s.runtimeStatusPath()); err != nil {
+		return fmt.Errorf("replace runtime status: %w", err)
+	}
 	return nil
 }
 

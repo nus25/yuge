@@ -304,6 +304,26 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 		t.Errorf("Expected status to be 'inactive', but got '%v'", statusMap["lastStatus"])
 	}
 
+	updatedConfigFile := filepath.Join(tempDir, "config", "updated-config.yaml")
+	if err := os.WriteFile(updatedConfigFile, []byte("{\"detailedLog\": false}"), 0644); err != nil {
+		t.Fatalf("WriteFile() updated config error = %v", err)
+	}
+	req, _ = http.NewRequest("POST", "/api/feed/test-feed", createJSONBody(t, map[string]any{
+		"uri":           "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
+		"configFile":    "updated-config.yaml",
+		"inactiveStart": true,
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("updated RegisterFeed() status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	updatedInfo, exists := fs.GetFeedInfo("test-feed")
+	if !exists || updatedInfo.Definition.ConfigFile != "updated-config.yaml" || updatedInfo.Status.LastStatus != FeedStatusInactive {
+		t.Fatalf("updated feed = %#v, exists = %t; want updated definition and inactive status", updatedInfo, exists)
+	}
+
 	//// test unregister feed
 	req, _ = http.NewRequest("DELETE", "/api/feed/test-feed", nil)
 	recorder = httptest.NewRecorder()
@@ -314,9 +334,20 @@ func TestAPIHandler_feedOperation(t *testing.T) {
 	}
 
 	// check feed is deleted
-	_, exists := fs.GetFeedInfo("test-feed")
+	_, exists = fs.GetFeedInfo("test-feed")
 	if exists {
 		t.Errorf("Expected feed to be deleted, but it exists")
+	}
+	statusData, readErr := os.ReadFile(filepath.Join(tempDir, "data", runtimeStatusFilename))
+	if readErr != nil {
+		t.Fatalf("ReadFile() status error = %v", readErr)
+	}
+	var snapshot runtimeFeedSnapshot
+	if err := json.Unmarshal(statusData, &snapshot); err != nil {
+		t.Fatalf("json.Unmarshal() status error = %v", err)
+	}
+	if len(snapshot.Feeds) != 0 {
+		t.Fatalf("status snapshot feeds = %#v, want empty", snapshot.Feeds)
 	}
 }
 

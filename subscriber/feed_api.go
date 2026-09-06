@@ -133,7 +133,7 @@ func (h *FeedApiHandler) RegisterFeed(c *gin.Context) {
 	var err error
 	if exists {
 		// 既存のフィードを更新
-		err = h.feedService.ReloadFeed(context.Background(), feedId)
+		err = h.feedService.UpdateFeed(context.Background(), def, status)
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"message": "Feed updated successfully",
@@ -146,9 +146,6 @@ func (h *FeedApiHandler) RegisterFeed(c *gin.Context) {
 		// 新規フィード作成
 		err = h.feedService.CreateFeed(context.Background(), def, status)
 		if err == nil {
-			if h.feedService.definitionProvider != nil {
-				h.feedService.definitionProvider.AddFeedDefinition(def)
-			}
 			c.JSON(http.StatusCreated, gin.H{
 				"message": "Feed created successfully",
 				"feedId":  feedId,

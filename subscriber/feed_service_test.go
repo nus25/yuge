@@ -201,7 +201,7 @@ func TestFeedService_Load(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, err := NewFeedService(configDir, dataDir, tt.provider, logger)
+			service, err := NewFeedService(configDir, filepath.Join(dataDir, tt.name), tt.provider, logger)
 			if err != nil {
 				t.Fatalf("Failed to create service: %v", err)
 			}
@@ -298,6 +298,123 @@ func TestFeedService_LoadFeeds_HydratesPostsFromStoreLoader(t *testing.T) {
 	}
 }
 
+func TestFeedService_LoadFeeds_RestoresInactiveStatusFromRuntimeSnapshot(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	dataDir := filepath.Join(tempDir, "data")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "sample.yaml"), []byte(testConfig), 0644); err != nil {
+		t.Fatalf("WriteFile() config error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, FILE_NAME), []byte("feeds:\n  - id: persisted-feed\n    uri: at://did:plc:persisted/app.bsky.feed.generator/feed\n    configFile: sample.yaml\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() feedlist error = %v", err)
+	}
+
+	provider, err := NewFileFeedDefinitionProvider(configDir)
+	if err != nil {
+		t.Fatalf("NewFileFeedDefinitionProvider() error = %v", err)
+	}
+	first, err := NewFeedService(configDir, dataDir, provider, logger)
+	if err != nil {
+		t.Fatalf("NewFeedService() first error = %v", err)
+	}
+	if err := first.LoadFeeds(ctx); err != nil {
+		t.Fatalf("LoadFeeds() first error = %v", err)
+	}
+	if err := first.UpdateStatus("persisted-feed", FeedStatusInactive); err != nil {
+		t.Fatalf("UpdateStatus() error = %v", err)
+	}
+
+	second, err := NewFeedService(configDir, dataDir, provider, logger)
+	if err != nil {
+		t.Fatalf("NewFeedService() second error = %v", err)
+	}
+	if err := second.LoadFeeds(ctx); err != nil {
+		t.Fatalf("LoadFeeds() second error = %v", err)
+	}
+	status, exists := second.GetFeedStatus("persisted-feed")
+	if !exists {
+		t.Fatal("expected persisted feed after restart")
+	}
+	if status.LastStatus != FeedStatusInactive {
+		t.Fatalf("LastStatus after restart = %s, want inactive", status.LastStatus)
+	}
+}
+
+func TestFeedService_LoadFeeds_UsesEmptyRuntimeSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, runtimeStatusFilename), []byte(`{"feeds":[]}`), 0644); err != nil {
+		t.Fatalf("WriteFile() status error = %v", err)
+	}
+	service, err := NewFeedService("", dataDir, nil, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err != nil {
+		t.Fatalf("NewFeedService() error = %v", err)
+	}
+	if err := service.LoadFeeds(context.Background()); err != nil {
+		t.Fatalf("LoadFeeds() error = %v", err)
+	}
+	if feeds := service.GetAllFeeds(); len(feeds) != 0 {
+		t.Fatalf("GetAllFeeds() = %#v, want empty", feeds)
+	}
+}
+
+func TestFeedService_LoadFeeds_RejectsMalformedRuntimeSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, runtimeStatusFilename), []byte(`{"feeds":`), 0644); err != nil {
+		t.Fatalf("WriteFile() status error = %v", err)
+	}
+	service, err := NewFeedService("", dataDir, nil, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err != nil {
+		t.Fatalf("NewFeedService() error = %v", err)
+	}
+	if err := service.LoadFeeds(context.Background()); err == nil {
+		t.Fatal("LoadFeeds() error = nil, want malformed runtime status error")
+	}
+}
+
+func TestFeedService_LoadFeeds_RetriesSavedErrorAsActive(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	dataDir := filepath.Join(tempDir, "data")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "sample.yaml"), []byte(testConfig), 0644); err != nil {
+		t.Fatalf("WriteFile() config error = %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() data error = %v", err)
+	}
+	snapshot := runtimeFeedSnapshot{Feeds: []runtimeFeedState{{
+		Definition: FeedDefinition{ID: "retry-feed", URI: "at://did:plc:retry/app.bsky.feed.generator/feed", ConfigFile: "sample.yaml"},
+		Status:     FeedStatus{FeedID: "retry-feed", LastStatus: FeedStatusError, LastUpdated: time.Now(), Error: "previous startup failed"},
+	}}}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, runtimeStatusFilename), data, 0644); err != nil {
+		t.Fatalf("WriteFile() status error = %v", err)
+	}
+
+	service, err := NewFeedService(configDir, dataDir, nil, slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	if err != nil {
+		t.Fatalf("NewFeedService() error = %v", err)
+	}
+	if err := service.LoadFeeds(ctx); err != nil {
+		t.Fatalf("LoadFeeds() error = %v", err)
+	}
+	status, exists := service.GetFeedStatus("retry-feed")
+	if !exists || status.LastStatus != FeedStatusActive {
+		t.Fatalf("GetFeedStatus() = %#v, %t; want active feed", status, exists)
+	}
+}
+
 func TestFeedService_LoadFeeds_WithoutLoader_IgnoresLegacySnapshot(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "config")
@@ -363,6 +480,7 @@ func TestFeedService_LoadFeeds_WithoutLoader_IgnoresLegacySnapshot(t *testing.T)
 func TestFeedService_GetFeedInfo(t *testing.T) {
 	// Setup
 	service := &FeedService{
+		dataDir: t.TempDir(),
 		feeds: map[string]FeedInfo{
 			"feed1": {
 				Definition: FeedDefinition{ID: "feed1"},
@@ -939,6 +1057,7 @@ func TestFeedService_DeleteFeed(t *testing.T) {
 	// Setup
 
 	service := &FeedService{
+		dataDir: t.TempDir(),
 		feeds: map[string]FeedInfo{
 			"feed1": {
 				Definition: FeedDefinition{ID: "feed1"},
@@ -978,8 +1097,9 @@ func TestFeedService_DeleteFeed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clone the service for each test to avoid state interference
 			testService := &FeedService{
-				feeds:  make(map[string]FeedInfo),
-				logger: service.logger,
+				dataDir: service.dataDir,
+				feeds:   make(map[string]FeedInfo),
+				logger:  service.logger,
 			}
 			maps.Copy(testService.feeds, service.feeds)
 
@@ -1007,6 +1127,7 @@ func TestFeedService_UpdateStatus(t *testing.T) {
 	// Setup
 	now := time.Now().Add(-1 * time.Hour)
 	service := &FeedService{
+		dataDir: t.TempDir(),
 		feeds: map[string]FeedInfo{
 			"feed1": {
 				Definition: FeedDefinition{ID: "feed1"},
