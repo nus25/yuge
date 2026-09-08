@@ -128,19 +128,32 @@
   <div id="feedsContent" class="tab-content active">
     <fieldset>
       <legend>選択中フィードの操作: <strong id="feedActionTarget">(未選択)</strong></legend>
-      <label for="feedStatusSelect">Status:</label>
-      <select id="feedStatusSelect">
-        <option value="active">active</option>
-        <option value="inactive">inactive</option>
-      </select>
-      <button onclick="updateFeedStatus()">Update Status</button>
-      <button onclick="reloadFeed()">Reload</button>
-      <button class="danger" onclick="clearFeed()">Clear</button>
-      <label for="feedTrimRemainInput">Remain:</label>
-      <input type="number" id="feedTrimRemainInput" min="0" step="1" value="0" style="width:6em;">
-      <button class="danger" onclick="trimFeed()">Trim</button>
-      <button class="danger" onclick="deleteFeed()">Delete</button>
-      <button onclick="getFeedConfig()">Get Config</button>
+      <div id="feedStatus">
+        <label for="feedStatusSelect">Status:</label>
+        <select id="feedStatusSelect">
+          <option value="active">active</option>
+          <option value="inactive">inactive</option>
+        </select>
+        <button onclick="updateFeedStatus()">Update Status</button>
+      </div>
+      <div id="feedReload">
+        <label for="feedReloadButton">Reload:</label>
+        <button onclick="reloadFeed()">Reload</button>
+      </div>
+      <div id="feedConfig">
+        <label for="feedConfigButton">Config:</label>
+        <button onclick="getFeedConfig()">Get Config</button>
+      </div>
+      <div id="feedTrim">
+        <label for="feedTrimButton">Trim:</label>
+        <label for="feedTrimRemainInput">Remain:</label>
+        <input type="number" id="feedTrimRemainInput" min="0" step="1" value="0" style="width:6em;">
+        <button class="danger" onclick="trimFeed()">Trim</button>
+      </div>
+      <div id="dangerZone">
+        <button class="danger" onclick="clearFeed()">Clear posts</button>
+        <button class="danger" onclick="deleteFeed()">Delete Feed</button>
+      </div>
       <pre id="feedActionResult"></pre>
     </fieldset>
 
