@@ -97,6 +97,22 @@ func TestFeedIntegration(t *testing.T) {
 		t.Errorf("Failed to clear feed: %v", err)
 	}
 
+	// Trim feed
+	for i := 0; i < 3; i++ {
+		if err := feed.AddPost("did:plc:user1", fmt.Sprintf("trimpost%d", i), fmt.Sprintf("cid%d", i), time.Now(), nil); err != nil {
+			t.Errorf("Failed to add post: %v", err)
+		}
+	}
+	if err := feed.Trim(1); err != nil {
+		t.Errorf("Failed to trim feed: %v", err)
+	}
+	if count := feed.PostCount(); count != 1 {
+		t.Errorf("Expected post count to be 1 after trim, got %d", count)
+	}
+	if err := feed.Trim(-1); err == nil {
+		t.Error("Expected error when trimming with negative remain")
+	}
+
 	// config
 	cfg := feed.Config()
 	if cfg == nil {

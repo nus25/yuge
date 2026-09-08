@@ -21,6 +21,7 @@ type PostMutationCoordinator interface {
 	AddPost(ctx context.Context, params AddPostParams) error
 	DeletePost(ctx context.Context, params DeletePostParams) error
 	ClearFeed(ctx context.Context, params ClearFeedParams) error
+	TrimFeed(ctx context.Context, params TrimFeedParams) error
 }
 
 type Handler struct {

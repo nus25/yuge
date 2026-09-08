@@ -350,3 +350,92 @@ func TestFeedMutationCoordinator_ClearFeed_CommitsAndBuildsContracts(t *testing.
 		t.Fatalf("ClearFeed count = %d, want 0", transactor.outboxRepo.lastClear.Count)
 	}
 }
+
+func TestFeedMutationCoordinator_TrimFeed_EnqueuesDeletesForTrimmedPosts(t *testing.T) {
+	t.Parallel()
+
+	trimmedPosts := []types.Post{
+		{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
+			Cid:       "cid-1",
+			IndexedAt: time.Date(2026, 5, 11, 4, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+		{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri("at://did:plc:user2/app.bsky.feed.post/post2"),
+			Cid:       "cid-2",
+			IndexedAt: time.Date(2026, 5, 11, 5, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo:   &fakeFeedRepository{trimmedPosts: trimmedPosts},
+		outboxRepo: &fakeOutboxRepository{},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+
+	err := coordinator.TrimFeed(context.Background(), TrimFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Remain:     10,
+		MutationID: "mutation-trim-1",
+	})
+	if err != nil {
+		t.Fatalf("TrimFeed() error = %v", err)
+	}
+	if !transactor.committed {
+		t.Fatal("transaction was not committed on success")
+	}
+	if transactor.rolledBack {
+		t.Fatal("transaction rolled back on success")
+	}
+	if transactor.feedRepo.trimCalls != 1 {
+		t.Fatalf("TrimOverflow calls = %d, want 1", transactor.feedRepo.trimCalls)
+	}
+	if transactor.feedRepo.lastTrim.TrimAt != 10 || transactor.feedRepo.lastTrim.Remain != 10 {
+		t.Fatalf("TrimOverflow params = %+v, want TrimAt=10 Remain=10", transactor.feedRepo.lastTrim)
+	}
+	if transactor.outboxRepo.enqueueCalls != len(trimmedPosts) {
+		t.Fatalf("Enqueue calls = %d, want %d", transactor.outboxRepo.enqueueCalls, len(trimmedPosts))
+	}
+	if transactor.outboxRepo.lastEnqueue.Operation != "delete" {
+		t.Fatalf("Operation = %s, want delete", transactor.outboxRepo.lastEnqueue.Operation)
+	}
+	if transactor.outboxRepo.lastEnqueue.OpKey != "mutation-trim-1:delete:feed-1:at://did:plc:user2/app.bsky.feed.post/post2" {
+		t.Fatalf("OpKey = %s", transactor.outboxRepo.lastEnqueue.OpKey)
+	}
+}
+
+func TestFeedMutationCoordinator_TrimFeed_RollsBackWhenOutboxEnqueueFails(t *testing.T) {
+	t.Parallel()
+
+	trimmedPosts := []types.Post{
+		{
+			Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+			Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
+			Cid:       "cid-1",
+			IndexedAt: time.Date(2026, 5, 11, 4, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo:   &fakeFeedRepository{trimmedPosts: trimmedPosts},
+		outboxRepo: &fakeOutboxRepository{enqueueErr: errors.New("enqueue failed")},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+
+	err := coordinator.TrimFeed(context.Background(), TrimFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Remain:     10,
+		MutationID: "mutation-trim-2",
+	})
+	if err == nil {
+		t.Fatal("expected TrimFeed to fail when outbox enqueue fails")
+	}
+	if transactor.committed {
+		t.Fatal("transaction committed on enqueue failure")
+	}
+	if !transactor.rolledBack {
+		t.Fatal("transaction did not roll back on enqueue failure")
+	}
+}

@@ -309,6 +309,7 @@ func registerFeedAPIRoutes(r gin.IRouter, feedAPI *FeedApiHandler) {
 		GET("/status", feedAPI.GetFeedStatus).
 		PATCH("/status", feedAPI.UpdateFeedStatus).
 		POST("/clear", feedAPI.ClearFeed).
+		POST("/trim", feedAPI.TrimFeed).
 		POST("/reload", feedAPI.ReloadFeed).
 		GET("/config", feedAPI.GetConfig).
 		GET("/post", feedAPI.GetAllPosts).

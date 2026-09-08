@@ -34,6 +34,8 @@ type Feed interface {
 	PostCount() int
 	Shutdown(ctx context.Context) error
 	Clear() error
+	// Trim keeps only the newest `remain` posts, deleting the rest.
+	Trim(remain int) error
 	Config() cfgTypes.FeedConfig
 	Metrics() *metrics.Metrics
 	ProcessCommand(logicBlockName string, command string, args map[string]string) (message string, err error)
@@ -182,6 +184,14 @@ func (f *feedImpl) Clear() error {
 		}
 	}
 	return nil
+}
+
+func (f *feedImpl) Trim(remain int) error {
+	if remain < 0 {
+		return errors.NewDependencyError("Feed", "remain", "remain must be greater than or equal to 0")
+	}
+	f.logger.Info("trimming feed", "remain", remain)
+	return f.store.Trim(remain)
 }
 
 func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {

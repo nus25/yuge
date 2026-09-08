@@ -275,6 +275,49 @@ func (s *FeedService) clearFeed(ctx context.Context, feedId string) error {
 	return nil
 }
 
+func (s *FeedService) TrimFeed(ctx context.Context, feedId string, remain int) error {
+	return s.withFeedOperationLock(feedId, func() error {
+		return s.trimFeed(ctx, feedId, remain)
+	})
+}
+
+func (s *FeedService) trimFeed(ctx context.Context, feedId string, remain int) error {
+	if remain < 0 {
+		return fmt.Errorf("remain must be >= 0")
+	}
+
+	fi, exists := s.GetFeedInfo(feedId)
+	if !exists {
+		return fmt.Errorf("feed %s not found", feedId)
+	}
+	if fi.Feed == nil {
+		return fmt.Errorf("feed %s is not initialized", feedId)
+	}
+
+	s.mu.RLock()
+	storeLoader := s.storeLoader
+	mutationCoordinator := s.mutationCoordinator
+	s.mu.RUnlock()
+
+	if storeLoader != nil {
+		if mutationCoordinator == nil {
+			return fmt.Errorf("post mutation coordinator is required to trim loader-backed feed %s", feedId)
+		}
+		if err := mutationCoordinator.TrimFeed(ctx, TrimFeedParams{
+			FeedID:  feedId,
+			FeedURI: types.FeedUri(fi.Definition.URI),
+			Remain:  remain,
+		}); err != nil {
+			return fmt.Errorf("trim persisted posts during trim feed: %w", err)
+		}
+	}
+
+	if err := fi.Feed.Trim(remain); err != nil {
+		return fmt.Errorf("trim feed: %w", err)
+	}
+	return nil
+}
+
 func (s *FeedService) Shutdown(ctx context.Context) error {
 	var mu sync.Mutex
 	var errs []error

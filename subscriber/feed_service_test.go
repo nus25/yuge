@@ -1053,6 +1053,98 @@ func TestFeedService_ClearFeed_RemovesPersistedPostsBeforeReload(t *testing.T) {
 	}
 }
 
+func TestFeedService_TrimFeed_KeepsNewestPostsAndPersistsTrim(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "feed-service-trim-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configDir := filepath.Join(tempDir, "config")
+	dataDir := filepath.Join(tempDir, "data")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+	sampleConfigPath := filepath.Join(configDir, "sample.yaml")
+	if err := os.WriteFile(sampleConfigPath, []byte(testConfig), 0644); err != nil {
+		t.Fatalf("Failed to write sample config: %v", err)
+	}
+
+	ctx := context.Background()
+	db, coordinator, err := openSQLiteMutationCoordinator(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("openSQLiteMutationCoordinator() error = %v", err)
+	}
+	defer db.Close()
+
+	repo := storesqlite.NewFeedRepository(db)
+	for index := 0; index < 30; index++ {
+		seedPost := types.Post{
+			Feed:      types.FeedUri("at://did:plc:1234567890/app.bsky.feed.generator/test"),
+			Uri:       types.PostUri(fmt.Sprintf("at://did:plc:user%d/app.bsky.feed.post/post%d", index, index)),
+			Cid:       fmt.Sprintf("cid-%d", index),
+			IndexedAt: time.Date(2026, 5, 11, 10, index, 0, 0, time.UTC).Format(time.RFC3339Nano),
+			Langs:     []string{"ja"},
+		}
+		if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "new-feed", Post: seedPost}); err != nil {
+			t.Fatalf("PutPost() error = %v", err)
+		}
+	}
+
+	provider, err := NewFileFeedDefinitionProvider(configDir)
+	if err != nil {
+		t.Fatalf("NewFileFeedDefinitionProvider() error = %v", err)
+	}
+	service, err := NewFeedService(configDir, dataDir, provider, logger)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	service.SetStoreLoader(newSQLitePostLoader(db))
+	service.SetMutationCoordinator(coordinator)
+
+	definition := FeedDefinition{
+		ID:         "new-feed",
+		URI:        "at://did:plc:1234567890/app.bsky.feed.generator/test",
+		ConfigFile: "sample.yaml",
+	}
+	if err := provider.AddFeedDefinition(definition); err != nil {
+		t.Fatalf("AddFeedDefinition() error = %v", err)
+	}
+	if err := service.CreateFeed(ctx, definition, FeedStatusActive); err != nil {
+		t.Fatalf("CreateFeed() error = %v", err)
+	}
+
+	info, exists := service.GetFeedInfo("new-feed")
+	if !exists {
+		t.Fatal("expected feed info to exist")
+	}
+	if got := len(info.Feed.ListPost("")); got != 24 {
+		t.Fatalf("initial ListPost() len = %d, want 24", got)
+	}
+
+	if err := service.TrimFeed(ctx, "new-feed", 5); err != nil {
+		t.Fatalf("TrimFeed() error = %v", err)
+	}
+	if got := len(info.Feed.ListPost("")); got != 5 {
+		t.Fatalf("ListPost() len after TrimFeed = %d, want 5", got)
+	}
+
+	persistedPosts, err := repo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: "new-feed"})
+	if err != nil {
+		t.Fatalf("ListPosts() after TrimFeed error = %v", err)
+	}
+	if got := len(persistedPosts); got != 5 {
+		t.Fatalf("persisted ListPosts() len after TrimFeed = %d, want 5", got)
+	}
+
+	if status, err := listPendingOutboxOperations(ctx, db, "new-feed"); err != nil {
+		t.Fatalf("listPendingOutboxOperations() error = %v", err)
+	} else if got := len(status); got != 25 {
+		t.Fatalf("pending outbox operation count = %d, want 25", got)
+	}
+}
+
 func TestFeedService_DeleteFeed(t *testing.T) {
 	// Setup
 

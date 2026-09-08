@@ -319,6 +319,32 @@ func (h *FeedApiHandler) ClearFeed(c *gin.Context) {
 	})
 }
 
+func (h *FeedApiHandler) TrimFeed(c *gin.Context) {
+	feedId := c.Param("feedid")
+	fi, _ := h.feedService.GetFeedInfo(feedId)
+	if fi.Status.LastStatus == FeedStatusError {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "cannot trim feed: feed is in error state",
+		})
+		return
+	}
+	remain, err := strconv.Atoi(c.Query("remain"))
+	if err != nil || remain < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "remain must be a non-negative integer",
+		})
+		return
+	}
+	if err := h.feedService.TrimFeed(context.Background(), feedId, remain); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{
+		"message": "Trim feed completed.",
+		"remain":  remain,
+	})
+}
+
 type projectionOpResponse struct {
 	ID          int64  `json:"id"`
 	FeedID      string `json:"feedId"`

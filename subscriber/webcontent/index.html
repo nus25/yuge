@@ -136,6 +136,9 @@
       <button onclick="updateFeedStatus()">Update Status</button>
       <button onclick="reloadFeed()">Reload</button>
       <button class="danger" onclick="clearFeed()">Clear</button>
+      <label for="feedTrimRemainInput">Remain:</label>
+      <input type="number" id="feedTrimRemainInput" min="0" step="1" value="0" style="width:6em;">
+      <button class="danger" onclick="trimFeed()">Trim</button>
       <button class="danger" onclick="deleteFeed()">Delete</button>
       <button onclick="getFeedConfig()">Get Config</button>
       <pre id="feedActionResult"></pre>
@@ -503,6 +506,17 @@
       if (!feedid) return;
       if (!confirm(`フィード「${feedid}」の投稿データを全て削除します。よろしいですか?`)) return;
       const res = await fetch(`${apiBase}/api/feed/${feedid}/clear`, { method: "POST" });
+      await renderResult("feedActionResult", res);
+    }
+
+    async function trimFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      const remain = parseInt(document.getElementById("feedTrimRemainInput").value, 10);
+      if (isNaN(remain) || remain < 0) return alert("Remain must be a non-negative integer.");
+      if (!confirm(`フィード「${feedid}」の投稿データを新しい${remain}件を残して削除します。よろしいですか?`)) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/trim?remain=${remain}`, { method: "POST" });
       await renderResult("feedActionResult", res);
     }
 

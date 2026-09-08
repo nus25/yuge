@@ -45,6 +45,13 @@ type ClearFeedParams struct {
 	MutationID string
 }
 
+type TrimFeedParams struct {
+	FeedID     string
+	FeedURI    types.FeedUri
+	Remain     int
+	MutationID string
+}
+
 func NewFeedMutationCoordinator(transactor FeedMutationTransactor) *FeedMutationCoordinator {
 	return &FeedMutationCoordinator{transactor: transactor}
 }
@@ -207,6 +214,60 @@ func (c *FeedMutationCoordinator) ClearFeed(ctx context.Context, params ClearFee
 			Count:      0,
 		}); err != nil {
 			return err
+		}
+		return nil
+	})
+}
+
+// TrimFeed deletes the oldest persisted posts, keeping only the newest Remain posts.
+func (c *FeedMutationCoordinator) TrimFeed(ctx context.Context, params TrimFeedParams) error {
+	if c == nil || c.transactor == nil {
+		return fmt.Errorf("feed mutation transactor is required")
+	}
+	mutationID := params.MutationID
+	if mutationID == "" {
+		mutationID = fmt.Sprintf("%d", time.Now().UTC().UnixNano())
+	}
+	remain := params.Remain
+	if remain < 0 {
+		remain = 0
+	}
+
+	return c.transactor.WithinTx(ctx, func(ctx context.Context, feedRepo storerepo.FeedRepository, outboxRepo projectionrepo.OutboxRepository) error {
+		trimmedPosts, err := feedRepo.TrimOverflow(ctx, storerepo.TrimOverflowParams{
+			FeedID: params.FeedID,
+			TrimAt: remain,
+			Remain: remain,
+		})
+		if err != nil {
+			return err
+		}
+		for _, trimmedPost := range trimmedPosts {
+			subjectKey := fmt.Sprintf("%s:%s", params.FeedID, trimmedPost.Uri)
+			opKey := fmt.Sprintf("%s:delete:%s", mutationID, subjectKey)
+			payloadJSON, err := json.Marshal(struct {
+				FeedURI types.FeedUri `json:"feedUri"`
+				Post    types.Post    `json:"post"`
+			}{
+				FeedURI: params.FeedURI,
+				Post:    trimmedPost,
+			})
+			if err != nil {
+				return fmt.Errorf("marshal trimmed delete payload: %w", err)
+			}
+			if err := outboxRepo.Enqueue(ctx, projectionrepo.EnqueueParams{
+				FeedID:      params.FeedID,
+				FeedURI:     string(params.FeedURI),
+				Target:      "gyoka",
+				Operation:   "delete",
+				MutationID:  mutationID,
+				SubjectKey:  subjectKey,
+				OpKey:       opKey,
+				PayloadJSON: string(payloadJSON),
+				Status:      "pending",
+			}); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

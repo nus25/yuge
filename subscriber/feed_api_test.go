@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1396,6 +1397,145 @@ func TestAPIHandler_DeletePostByDidUsesCoordinator(t *testing.T) {
 			t.Fatalf("remaining posts = %d, want 2", len(posts.Posts))
 		}
 	})
+}
+
+func TestAPIHandler_TrimFeed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	dataDir := filepath.Join(tempDir, "data")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+	configFile := filepath.Join(configDir, "test-config.yaml")
+	if err := os.WriteFile(configFile, []byte(testConfig), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	provider, err := NewFileFeedDefinitionProvider(configDir)
+	if err != nil {
+		t.Fatalf("Failed to create feed definition provider: %v", err)
+	}
+	fs, err := NewFeedService(configDir, dataDir, provider, logger)
+	defer os.RemoveAll(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create feed service: %v", err)
+	}
+
+	ctx := context.Background()
+	db, coordinator, err := openSQLiteMutationCoordinator(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("openSQLiteMutationCoordinator() error = %v", err)
+	}
+	defer db.Close()
+	fs.SetStoreLoader(newSQLitePostLoader(db))
+	fs.SetMutationCoordinator(coordinator)
+
+	definition := FeedDefinition{
+		ID:         "test-feed",
+		URI:        "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
+		ConfigFile: "test-config.yaml",
+	}
+	if err := provider.AddFeedDefinition(definition); err != nil {
+		t.Fatalf("AddFeedDefinition() error = %v", err)
+	}
+
+	repo := storesqlite.NewFeedRepository(db)
+	for index := 0; index < 3; index++ {
+		seedPost := types.Post{
+			Feed:      types.FeedUri(definition.URI),
+			Uri:       types.PostUri(fmt.Sprintf("at://did:plc:test%d/app.bsky.feed.post/testrkey%d", index, index)),
+			Cid:       fmt.Sprintf("trimfeed-%d", index),
+			IndexedAt: time.Date(2024, 1, 1, index, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		}
+		if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: definition.ID, Post: seedPost}); err != nil {
+			t.Fatalf("PutPost() error = %v", err)
+		}
+	}
+	if err := fs.CreateFeed(ctx, definition, FeedStatusActive); err != nil {
+		t.Fatalf("CreateFeed() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(fs)
+	router := gin.Default()
+	router.Group("/api/feed/:feedid").Use(api.ValidateFeedId()).
+		POST("/trim", api.TrimFeed).
+		GET("/post", api.GetAllPosts)
+
+	req, _ := http.NewRequest("POST", "/api/feed/test-feed/trim?remain=1", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+	}
+
+	req, _ = http.NewRequest("GET", "/api/feed/test-feed/post", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	var posts GetAllPostsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &posts); err != nil {
+		t.Fatalf("Failed to unmarshal posts response: %v", err)
+	}
+	if len(posts.Posts) != 1 {
+		t.Errorf("Expected 1 post after trim, but got %d", len(posts.Posts))
+	}
+
+	persistedPosts, err := repo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: definition.ID})
+	if err != nil {
+		t.Fatalf("ListPosts() error = %v", err)
+	}
+	if len(persistedPosts) != 1 {
+		t.Errorf("Expected 1 persisted post after trim, but got %d", len(persistedPosts))
+	}
+}
+
+func TestAPIHandler_TrimFeed_RejectsNegativeRemain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	dataDir := filepath.Join(tempDir, "data")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+	configFile := filepath.Join(configDir, "test-config.yaml")
+	if err := os.WriteFile(configFile, []byte(testConfig), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	provider, err := NewFileFeedDefinitionProvider(configDir)
+	if err != nil {
+		t.Fatalf("Failed to create feed definition provider: %v", err)
+	}
+	fs, err := NewFeedService(configDir, dataDir, provider, logger)
+	defer os.RemoveAll(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create feed service: %v", err)
+	}
+	definition := FeedDefinition{
+		ID:         "test-feed",
+		URI:        "at://did:plc:abcdefg/app.bsky.feed.generator/test-feed",
+		ConfigFile: "test-config.yaml",
+	}
+	if err := provider.AddFeedDefinition(definition); err != nil {
+		t.Fatalf("AddFeedDefinition() error = %v", err)
+	}
+	if err := fs.CreateFeed(context.Background(), definition, FeedStatusActive); err != nil {
+		t.Fatalf("CreateFeed() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(fs)
+	router := gin.Default()
+	router.Group("/api/feed/:feedid").Use(api.ValidateFeedId()).
+		POST("/trim", api.TrimFeed)
+
+	req, _ := http.NewRequest("POST", "/api/feed/test-feed/trim?remain=-1", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+	}
 }
 
 func TestAPIHandler_ReloadAndClearFeed(t *testing.T) {

@@ -44,6 +44,10 @@ func (c *blockingDeleteCoordinator) ClearFeed(ctx context.Context, params ClearF
 	return c.inner.ClearFeed(ctx, params)
 }
 
+func (c *blockingDeleteCoordinator) TrimFeed(ctx context.Context, params TrimFeedParams) error {
+	return c.inner.TrimFeed(ctx, params)
+}
+
 type spyPostMutationCoordinator struct {
 	addPostErr       error
 	addPostCalls     int
@@ -54,6 +58,9 @@ type spyPostMutationCoordinator struct {
 	clearFeedErr     error
 	clearFeedCalls   int
 	lastClearParams  ClearFeedParams
+	trimFeedErr      error
+	trimFeedCalls    int
+	lastTrimParams   TrimFeedParams
 	sequence         *[]string
 }
 
@@ -82,6 +89,15 @@ func (s *spyPostMutationCoordinator) ClearFeed(ctx context.Context, params Clear
 		*s.sequence = append(*s.sequence, "coordinator")
 	}
 	return s.clearFeedErr
+}
+
+func (s *spyPostMutationCoordinator) TrimFeed(ctx context.Context, params TrimFeedParams) error {
+	s.trimFeedCalls++
+	s.lastTrimParams = params
+	if s.sequence != nil {
+		*s.sequence = append(*s.sequence, "coordinator")
+	}
+	return s.trimFeedErr
 }
 
 type fakeHandlerFeed struct {
@@ -134,6 +150,7 @@ func (f *fakeHandlerFeed) Test(did string, rkey string, post *apibsky.FeedPost) 
 func (f *fakeHandlerFeed) PostCount() int                                            { return 0 }
 func (f *fakeHandlerFeed) Shutdown(ctx context.Context) error                        { return nil }
 func (f *fakeHandlerFeed) Clear() error                                              { return nil }
+func (f *fakeHandlerFeed) Trim(remain int) error                                     { return nil }
 func (f *fakeHandlerFeed) Config() cfgTypes.FeedConfig                               { return f.config }
 func (f *fakeHandlerFeed) Metrics() *metrics.Metrics                                 { return nil }
 func (f *fakeHandlerFeed) ProcessCommand(logicBlockName string, command string, args map[string]string) (string, error) {
