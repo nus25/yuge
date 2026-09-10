@@ -1140,8 +1140,20 @@ func TestFeedService_TrimFeed_KeepsNewestPostsAndPersistsTrim(t *testing.T) {
 
 	if status, err := listPendingOutboxOperations(ctx, db, "new-feed"); err != nil {
 		t.Fatalf("listPendingOutboxOperations() error = %v", err)
-	} else if got := len(status); got != 25 {
-		t.Fatalf("pending outbox operation count = %d, want 25", got)
+	} else if got := len(status); got != 1 {
+		t.Fatalf("pending outbox operation count = %d, want 1", got)
+	} else if status[0].Operation != "trim" {
+		t.Fatalf("pending outbox operation = %s, want trim", status[0].Operation)
+	} else {
+		var payload struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal([]byte(status[0].PayloadJSON), &payload); err != nil {
+			t.Fatalf("unmarshal trim payload: %v", err)
+		}
+		if payload.Count != 5 {
+			t.Fatalf("trim payload count = %d, want 5", payload.Count)
+		}
 	}
 }
 

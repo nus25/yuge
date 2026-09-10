@@ -115,30 +115,8 @@ func (c *FeedMutationCoordinator) AddPost(ctx context.Context, params AddPostPar
 			if err != nil {
 				return err
 			}
-			for _, trimmedPost := range trimmedPosts {
-				trimmedSubjectKey := fmt.Sprintf("%s:%s", params.FeedID, trimmedPost.Uri)
-				trimmedOpKey := fmt.Sprintf("%s:delete:%s", mutationID, trimmedSubjectKey)
-				trimmedPayloadJSON, err := json.Marshal(struct {
-					FeedURI types.FeedUri `json:"feedUri"`
-					Post    types.Post    `json:"post"`
-				}{
-					FeedURI: params.FeedURI,
-					Post:    trimmedPost,
-				})
-				if err != nil {
-					return fmt.Errorf("marshal trimmed delete payload: %w", err)
-				}
-				if err := outboxRepo.Enqueue(ctx, projectionrepo.EnqueueParams{
-					FeedID:      params.FeedID,
-					FeedURI:     string(params.FeedURI),
-					Target:      "gyoka",
-					Operation:   "delete",
-					MutationID:  mutationID,
-					SubjectKey:  trimmedSubjectKey,
-					OpKey:       trimmedOpKey,
-					PayloadJSON: string(trimmedPayloadJSON),
-					Status:      "pending",
-				}); err != nil {
+			if len(trimmedPosts) > 0 {
+				if err := enqueueTrimProjection(ctx, outboxRepo, params.FeedID, params.FeedURI, params.TrimRemain, mutationID); err != nil {
 					return err
 				}
 			}
@@ -242,33 +220,37 @@ func (c *FeedMutationCoordinator) TrimFeed(ctx context.Context, params TrimFeedP
 		if err != nil {
 			return err
 		}
-		for _, trimmedPost := range trimmedPosts {
-			subjectKey := fmt.Sprintf("%s:%s", params.FeedID, trimmedPost.Uri)
-			opKey := fmt.Sprintf("%s:delete:%s", mutationID, subjectKey)
-			payloadJSON, err := json.Marshal(struct {
-				FeedURI types.FeedUri `json:"feedUri"`
-				Post    types.Post    `json:"post"`
-			}{
-				FeedURI: params.FeedURI,
-				Post:    trimmedPost,
-			})
-			if err != nil {
-				return fmt.Errorf("marshal trimmed delete payload: %w", err)
-			}
-			if err := outboxRepo.Enqueue(ctx, projectionrepo.EnqueueParams{
-				FeedID:      params.FeedID,
-				FeedURI:     string(params.FeedURI),
-				Target:      "gyoka",
-				Operation:   "delete",
-				MutationID:  mutationID,
-				SubjectKey:  subjectKey,
-				OpKey:       opKey,
-				PayloadJSON: string(payloadJSON),
-				Status:      "pending",
-			}); err != nil {
+		if len(trimmedPosts) > 0 {
+			if err := enqueueTrimProjection(ctx, outboxRepo, params.FeedID, params.FeedURI, remain, mutationID); err != nil {
 				return err
 			}
 		}
 		return nil
+	})
+}
+
+func enqueueTrimProjection(ctx context.Context, outboxRepo projectionrepo.OutboxRepository, feedID string, feedURI types.FeedUri, remain int, mutationID string) error {
+	payloadJSON, err := json.Marshal(struct {
+		FeedURI types.FeedUri `json:"feedUri"`
+		Count   int           `json:"count"`
+	}{
+		FeedURI: feedURI,
+		Count:   remain,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal trim projection payload: %w", err)
+	}
+	subjectKey := fmt.Sprintf("%s:trim", feedID)
+	opKey := fmt.Sprintf("%s:trim:%s:%d", mutationID, feedID, remain)
+	return outboxRepo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      feedID,
+		FeedURI:     string(feedURI),
+		Target:      "gyoka",
+		Operation:   "trim",
+		MutationID:  mutationID,
+		SubjectKey:  subjectKey,
+		OpKey:       opKey,
+		PayloadJSON: string(payloadJSON),
+		Status:      "pending",
 	})
 }

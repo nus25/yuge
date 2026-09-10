@@ -3,6 +3,7 @@ package subscriber
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -184,7 +185,7 @@ func TestSQLiteFeedMutationTransactor_CommitsPostAndOutbox(t *testing.T) {
 	}
 }
 
-func TestSQLiteFeedMutationTransactor_AddPost_TrimsOverflowAndEnqueuesDelete(t *testing.T) {
+func TestSQLiteFeedMutationTransactor_AddPost_TrimsOverflowAndProjectsTrim(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -267,11 +268,20 @@ func TestSQLiteFeedMutationTransactor_AddPost_TrimsOverflowAndEnqueuesDelete(t *
 	if entries[0].Operation != "add" {
 		t.Fatalf("entries[0].Operation = %s, want add", entries[0].Operation)
 	}
-	if entries[1].Operation != "delete" {
-		t.Fatalf("entries[1].Operation = %s, want delete", entries[1].Operation)
+	if entries[1].Operation != "trim" {
+		t.Fatalf("entries[1].Operation = %s, want trim", entries[1].Operation)
 	}
-	if entries[1].SubjectKey != fmt.Sprintf("feed-1:%s", seedPosts[0].Uri) {
-		t.Fatalf("entries[1].SubjectKey = %s, want %s", entries[1].SubjectKey, fmt.Sprintf("feed-1:%s", seedPosts[0].Uri))
+	if entries[1].SubjectKey != "feed-1:trim" {
+		t.Fatalf("entries[1].SubjectKey = %s, want feed-1:trim", entries[1].SubjectKey)
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(entries[1].PayloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal trim payload: %v", err)
+	}
+	if payload.Count != 2 {
+		t.Fatalf("trim payload count = %d, want 2", payload.Count)
 	}
 }
 

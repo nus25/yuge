@@ -2,6 +2,7 @@ package subscriber
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -85,6 +86,7 @@ func (r *fakeFeedRepository) GetFeedState(ctx context.Context, feedID string) (s
 type fakeOutboxRepository struct {
 	enqueueErr   error
 	lastEnqueue  projectionrepo.EnqueueParams
+	enqueues     []projectionrepo.EnqueueParams
 	enqueueCalls int
 	clearFeedErr error
 	lastClear    projectionrepo.ClearFeedParams
@@ -94,6 +96,7 @@ type fakeOutboxRepository struct {
 func (r *fakeOutboxRepository) Enqueue(ctx context.Context, params projectionrepo.EnqueueParams) error {
 	r.enqueueCalls++
 	r.lastEnqueue = params
+	r.enqueues = append(r.enqueues, params)
 	return r.enqueueErr
 }
 
@@ -219,6 +222,55 @@ func TestFeedMutationCoordinator_AddPost_CommitsAndBuildsContracts(t *testing.T)
 	}
 	if transactor.outboxRepo.lastEnqueue.Target != "gyoka" {
 		t.Fatalf("Target = %s, want gyoka", transactor.outboxRepo.lastEnqueue.Target)
+	}
+}
+
+func TestFeedMutationCoordinator_AddPost_ProjectsConfiguredTrim(t *testing.T) {
+	t.Parallel()
+
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo: &fakeFeedRepository{trimmedPosts: []types.Post{{
+			Uri: types.PostUri("at://did:plc:user1/app.bsky.feed.post/old-post"),
+		}}},
+		outboxRepo: &fakeOutboxRepository{},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+
+	err := coordinator.AddPost(context.Background(), AddPostParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Did:        "did:plc:user2",
+		Rkey:       "new-post",
+		Cid:        "cid-1",
+		IndexedAt:  time.Date(2026, 5, 11, 4, 0, 0, 0, time.UTC),
+		TrimAt:     120,
+		TrimRemain: 100,
+		MutationID: "mutation-add-1",
+	})
+	if err != nil {
+		t.Fatalf("AddPost() error = %v", err)
+	}
+	if transactor.feedRepo.lastTrim.TrimAt != 120 || transactor.feedRepo.lastTrim.Remain != 100 {
+		t.Fatalf("TrimOverflow params = %+v, want TrimAt=120 Remain=100", transactor.feedRepo.lastTrim)
+	}
+	if transactor.outboxRepo.enqueueCalls != 2 {
+		t.Fatalf("Enqueue calls = %d, want 2", transactor.outboxRepo.enqueueCalls)
+	}
+	trimEntry := transactor.outboxRepo.enqueues[1]
+	if trimEntry.Operation != "trim" {
+		t.Fatalf("trim operation = %s, want trim", trimEntry.Operation)
+	}
+	if trimEntry.OpKey != "mutation-add-1:trim:feed-1:100" {
+		t.Fatalf("trim OpKey = %s", trimEntry.OpKey)
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(trimEntry.PayloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal trim payload: %v", err)
+	}
+	if payload.Count != 100 {
+		t.Fatalf("trim payload count = %d, want 100", payload.Count)
 	}
 }
 
@@ -351,7 +403,7 @@ func TestFeedMutationCoordinator_ClearFeed_CommitsAndBuildsContracts(t *testing.
 	}
 }
 
-func TestFeedMutationCoordinator_TrimFeed_EnqueuesDeletesForTrimmedPosts(t *testing.T) {
+func TestFeedMutationCoordinator_TrimFeed_ProjectsTrimForTrimmedPosts(t *testing.T) {
 	t.Parallel()
 
 	trimmedPosts := []types.Post{
@@ -395,14 +447,23 @@ func TestFeedMutationCoordinator_TrimFeed_EnqueuesDeletesForTrimmedPosts(t *test
 	if transactor.feedRepo.lastTrim.TrimAt != 10 || transactor.feedRepo.lastTrim.Remain != 10 {
 		t.Fatalf("TrimOverflow params = %+v, want TrimAt=10 Remain=10", transactor.feedRepo.lastTrim)
 	}
-	if transactor.outboxRepo.enqueueCalls != len(trimmedPosts) {
-		t.Fatalf("Enqueue calls = %d, want %d", transactor.outboxRepo.enqueueCalls, len(trimmedPosts))
+	if transactor.outboxRepo.enqueueCalls != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1", transactor.outboxRepo.enqueueCalls)
 	}
-	if transactor.outboxRepo.lastEnqueue.Operation != "delete" {
-		t.Fatalf("Operation = %s, want delete", transactor.outboxRepo.lastEnqueue.Operation)
+	if transactor.outboxRepo.lastEnqueue.Operation != "trim" {
+		t.Fatalf("Operation = %s, want trim", transactor.outboxRepo.lastEnqueue.Operation)
 	}
-	if transactor.outboxRepo.lastEnqueue.OpKey != "mutation-trim-1:delete:feed-1:at://did:plc:user2/app.bsky.feed.post/post2" {
+	if transactor.outboxRepo.lastEnqueue.OpKey != "mutation-trim-1:trim:feed-1:10" {
 		t.Fatalf("OpKey = %s", transactor.outboxRepo.lastEnqueue.OpKey)
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(transactor.outboxRepo.lastEnqueue.PayloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal trim payload: %v", err)
+	}
+	if payload.Count != 10 {
+		t.Fatalf("trim payload count = %d, want 10", payload.Count)
 	}
 }
 
