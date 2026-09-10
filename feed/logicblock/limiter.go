@@ -93,12 +93,26 @@ func NewLimiterLogicBlock(cfg types.LogicBlockConfig, logger *slog.Logger) (Logi
 
 func (l *LimiterLogicblock) Test(did string, rkey string, post *apibsky.FeedPost) bool {
 	if l.limiter != nil {
-		if isAllowed, _ := l.limiter.RecordPost(did); !isAllowed {
-			l.logger.Warn("too many posts from user", "did", did)
+		if isAllowed, count := l.limiter.RecordPost(did); !isAllowed {
+			shouldLog := count == l.limitCount+1 ||
+				(count%l.limitCount == 0 && isPowerOfTwo(count/l.limitCount))
+
+			if shouldLog {
+				l.logger.Warn("post rate limit exceeded",
+					"did", did,
+					"count", count,
+					"limit", l.limitCount,
+					"window", l.limitWindow,
+				)
+			}
 			return false
 		}
 	}
 	return true
+}
+
+func isPowerOfTwo(value int) bool {
+	return value > 0 && value&(value-1) == 0
 }
 
 func (l *LimiterLogicblock) Reset() error {

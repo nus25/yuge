@@ -14,10 +14,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nus25/yuge/feed/store/editor"
 	_ "github.com/nus25/yuge/subscriber/customfeedlogic" //for register custom logic block
 	jetstreamClient "github.com/nus25/yuge/subscriber/pkg/client"
 	"github.com/nus25/yuge/subscriber/pkg/client/schedulers/parallel"
+	"github.com/nus25/yuge/subscriber/projection/gyoka"
+	projectionsqlite "github.com/nus25/yuge/subscriber/projection/sqlite"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 )
@@ -56,31 +57,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse jetstream-url: %w", err)
 	}
 
-	//// setup store editor
-	var se editor.StoreEditor
-	//Gyoka Editor
-	if cctx.String("feed-editor-endpoint") != "" {
-		logger.Info("feed editor config", "endpoint", cctx.String("feed-editor-endpoint"))
-		var opts []editor.ClientOptionFunc
-		if cctx.String("feed-editor-cf-id") != "" {
-			opts = append(opts, editor.WithCfToken(cctx.String("feed-editor-cf-id"), cctx.String("feed-editor-cf-secret")))
-		}
-		if cctx.String("gyoka-api-key") != "" {
-			opts = append(opts, editor.WithApiKey(cctx.String("gyoka-api-key")))
-		}
-		se, err = editor.NewGyokaEditor(cctx.String("feed-editor-endpoint"), logger, opts...)
-		if err != nil {
-			return fmt.Errorf("failed to create gyoka editor: %w", err)
-		}
-	} else {
-		logger.Info("feed editor endpoint is not set. run local mode.")
+	gyokaConfig, gyokaProjectionEnabled, err := loadGyokaProjectionConfigForStartup(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"))
+	if err != nil {
+		logger.Warn("Gyoka projection disabled because its configuration could not be loaded", "error", err)
 	}
-	// if no feed editor endpoint, use file editor
-	if se == nil {
-		se, err = editor.NewFileEditor(cctx.String("data-directory-path"), logger)
-		if err != nil {
-			return fmt.Errorf("failed to create file editor: %w", err)
-		}
+	if gyokaProjectionEnabled {
+		logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity)
 	}
 
 	// setup feed service
@@ -95,9 +77,60 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		}
 	}
 	logger.Info("creating feed service", "config-directory-path", cctx.String("config-directory-path"), "data-directory-path", cctx.String("data-directory-path"))
-	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, se, logger)
+	fs, err = NewFeedService(cctx.String("config-directory-path"), cctx.String("data-directory-path"), fdp, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create feed service: %w", err)
+	}
+	projectionClientOptions := []gyoka.ClientOptionFunc{
+		gyoka.WithMinRequestInterval(time.Duration(gyokaConfig.minRequestIntervalMS) * time.Millisecond),
+	}
+	sqlitePersistence, err := openSQLiteRuntimePersistence(ctx, cctx.String("data-directory-path"))
+	if err != nil {
+		return fmt.Errorf("failed to initialize sqlite runtime persistence: %w", err)
+	}
+	if cctx.Bool("import-legacy-store-json") {
+		if fdp == nil {
+			return fmt.Errorf("legacy snapshot import requires feed definition provider")
+		}
+		importResult, err := importLegacyFileSnapshots(ctx, logger, fdp, cctx.String("data-directory-path"), sqlitePersistence.mutationDB, importLegacyFileSnapshotsOptions{
+			EnqueueProjection: cctx.Bool("import-legacy-store-enqueue-projection"),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to import legacy store snapshots: %w", err)
+		}
+		logger.Info("legacy snapshot import completed",
+			"feeds", importResult.ImportedFeeds,
+			"posts", importResult.ImportedPosts,
+			"projectionOps", importResult.EnqueuedProjectionOps,
+			"enqueueProjection", cctx.Bool("import-legacy-store-enqueue-projection"),
+		)
+	}
+	fs.SetStoreLoader(sqlitePersistence.postLoader)
+	fs.SetMutationCoordinator(sqlitePersistence.mutationCoordinator)
+	defer func() {
+		if err := sqlitePersistence.Close(); err != nil {
+			logger.Error("failed to close sqlite runtime persistence", "error", err)
+		}
+	}()
+	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, gyoka.ClientConfig{
+		Host:         gyokaConfig.host,
+		UserIdentity: gyokaConfig.userIdentity,
+		AppPassword:  gyokaConfig.appPassword,
+	}, gyokaProjectionRuntimeOptions{
+		completedRetention: cctx.Duration("projection-completed-retention"),
+		clientOptions:      projectionClientOptions,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start gyoka projection runtime: %w", err)
+	}
+	if projectionRuntime != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := projectionRuntime.Close(shutdownCtx); err != nil {
+				logger.Error("failed to close gyoka projection runtime", "error", err)
+			}
+		}()
 	}
 	logger.Info("loading feeds")
 	if err := fs.LoadFeeds(context.Background()); err != nil {
@@ -107,6 +140,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 
 	// handler
 	h := NewHandler(logger, fs)
+	h.MutationCoordinator = sqlitePersistence.mutationCoordinator
 
 	// setup jetstream client
 	config := jetstreamClient.DefaultClientConfig()
@@ -156,8 +190,14 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	apiServer := &http.Server{
 		Addr: cctx.String("api-listen-addr"),
 		Handler: func() http.Handler {
-			r := gin.Default()
+			r := gin.New()
+			r.Use(
+				gin.Recovery(),
+				requestLogger(logger.With("component", "APIServer")),
+			)
 			feedAPI := NewFeedApiHandler(fs)
+			feedAPI.MutationCoordinator = sqlitePersistence.mutationCoordinator
+			feedAPI.ProjectionOutbox = projectionsqlite.NewOutboxRepository(sqlitePersistence.loaderDB)
 			jetstreamAPI := NewJetstreamApiHandler(jetstreamController)
 			r.GET("", func(c *gin.Context) {
 				c.String(200, fmt.Sprintf("hello yuge feed subscriber\njetstream-url: %s", u.String()))
@@ -169,23 +209,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			r.POST("/api/jetstream/connect", jetstreamAPI.Connect)
 			r.POST("/api/jetstream/disconnect", jetstreamAPI.Disconnect)
 			r.GET("/api/jetstream/status", jetstreamAPI.Status)
-			r.GET("/api/feed", feedAPI.ListFeed)
-			r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed) // POSTからPUTに変更
-			r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).
-				GET("", feedAPI.GetFeedInfo).
-				DELETE("", feedAPI.UnregisterFeed).
-				GET("/status", feedAPI.GetFeedStatus).
-				PATCH("/status", feedAPI.UpdateFeedStatus).
-				POST("/clear", feedAPI.ClearFeed).
-				POST("/reload", feedAPI.ReloadFeed).
-				GET("/config", feedAPI.GetConfig).
-				GET("/post", feedAPI.GetAllPosts).
-				GET("/post/:did", feedAPI.GetPostsByDid).
-				GET("/post/:did/:rkey", feedAPI.GetPostByRkey).
-				POST("/post/:did/:rkey", feedAPI.AddPost).
-				DELETE("/post/:did", feedAPI.DeletePostByDid).
-				DELETE("/post/:did/:rkey", feedAPI.DeletePost).
-				POST("/logicblock/:logicblockname/:command", feedAPI.ProcessLogicBlockCommand)
+			r.GET("/api/admin/projection/ops", feedAPI.ListProjectionOps)
+			r.GET("/api/admin/projection/ops/summary", feedAPI.GetProjectionOpSummary)
+			r.POST("/api/admin/projection/ops/:id/retry", feedAPI.RetryProjectionOp)
+			r.DELETE("/api/admin/projection/ops/:id", feedAPI.DeleteProjectionOp)
+			r.POST("/api/admin/projection/ops/purge-completed", feedAPI.PurgeCompletedProjectionOps)
+			registerFeedAPIRoutes(r, feedAPI)
 
 			return r
 		}(),
@@ -269,4 +298,26 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 
 	log.Info("shut down successfully")
 	return nil
+}
+
+func registerFeedAPIRoutes(r gin.IRouter, feedAPI *FeedApiHandler) {
+	r.GET("/api/feed", feedAPI.ListFeed)
+	r.PUT("/api/feed/:feedid", feedAPI.RegisterFeed)
+	r.POST("/api/feed/:feedid", feedAPI.RegisterFeed)
+	r.Group("/api/feed/:feedid").Use(feedAPI.ValidateFeedId()).
+		GET("", feedAPI.GetFeedInfo).
+		DELETE("", feedAPI.UnregisterFeed).
+		GET("/status", feedAPI.GetFeedStatus).
+		PATCH("/status", feedAPI.UpdateFeedStatus).
+		POST("/clear", feedAPI.ClearFeed).
+		POST("/trim", feedAPI.TrimFeed).
+		POST("/reload", feedAPI.ReloadFeed).
+		GET("/config", feedAPI.GetConfig).
+		GET("/post", feedAPI.GetAllPosts).
+		GET("/post/:did", feedAPI.GetPostsByDid).
+		GET("/post/:did/:rkey", feedAPI.GetPostByRkey).
+		POST("/post/:did/:rkey", feedAPI.AddPost).
+		DELETE("/post/:did", feedAPI.DeletePostByDid).
+		DELETE("/post/:did/:rkey", feedAPI.DeletePost).
+		POST("/logicblock/:logicblockname/:command", feedAPI.ProcessLogicBlockCommand)
 }

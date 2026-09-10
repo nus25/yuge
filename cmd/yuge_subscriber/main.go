@@ -4,7 +4,9 @@ import (
 	_ "embed"
 	"log"
 	"os"
+	"time"
 
+	_ "github.com/mattn/go-sqlite3" // Register the SQLite driver for upcoming SQLite-backed persistence.
 	"github.com/nus25/yuge/subscriber"
 	"github.com/urfave/cli/v2"
 )
@@ -35,30 +37,6 @@ func run(args []string) {
 						EnvVars: []string{"LOG_LEVEL"},
 					},
 					&cli.StringFlag{
-						Name:     "feed-editor-endpoint",
-						Usage:    "endpoint url for gyoka editor",
-						EnvVars:  []string{"FEED_EDITOR_ENDPOINT"},
-						Required: false,
-					},
-					&cli.StringFlag{
-						Name:    "feed-editor-cf-id",
-						Usage:   "Cloudflare access id",
-						Value:   "",
-						EnvVars: []string{"CF_ACCESS_CLIENT_ID"},
-					},
-					&cli.StringFlag{
-						Name:    "feed-editor-cf-secret",
-						Usage:   "Cloudflare access secret",
-						Value:   "",
-						EnvVars: []string{"CF_ACCESS_CLIENT_SECRET"},
-					},
-					&cli.StringFlag{
-						Name:    "gyoka-api-key",
-						Usage:   "Gyoka API key",
-						Value:   "",
-						EnvVars: []string{"GYOKA_API_KEY"},
-					},
-					&cli.StringFlag{
 						Name:    "jetstream-url",
 						Usage:   "full websocket path to the jetstream endpoint",
 						Value:   "ws://localhost:6009/subscribe",
@@ -87,6 +65,24 @@ func run(args []string) {
 						Usage:   "data directory path",
 						Value:   "./data",
 						EnvVars: []string{"DATA_DIR"},
+					},
+					&cli.BoolFlag{
+						Name:    "import-legacy-store-json",
+						Usage:   "import legacy store.json snapshots into SQLite before startup",
+						Value:   false,
+						EnvVars: []string{"IMPORT_LEGACY_STORE_JSON"},
+					},
+					&cli.BoolFlag{
+						Name:    "import-legacy-store-enqueue-projection",
+						Usage:   "enqueue imported legacy posts into projection_outbox for replay during startup",
+						Value:   false,
+						EnvVars: []string{"IMPORT_LEGACY_STORE_ENQUEUE_PROJECTION"},
+					},
+					&cli.DurationFlag{
+						Name:    "projection-completed-retention",
+						Usage:   "retain completed projection operations for this duration",
+						Value:   7 * 24 * time.Hour,
+						EnvVars: []string{"PROJECTION_COMPLETED_RETENTION"},
 					},
 					&cli.StringFlag{
 						Name:    "api-listen-addr",

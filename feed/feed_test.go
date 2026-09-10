@@ -3,14 +3,12 @@ package feed
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"testing"
 	"time"
 
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/nus25/yuge/feed/config/feed"
 	"github.com/nus25/yuge/feed/config/types"
-	"github.com/nus25/yuge/feed/store/editor"
 )
 
 // Integration test for Feed
@@ -18,18 +16,10 @@ func TestFeedIntegration(t *testing.T) {
 	// Create test configuration
 	config := createTestConfig(t)
 
-	// Create in-memory store
-	dir := t.TempDir()
-	fileEditor, err := editor.NewFileEditor(dir, slog.Default())
-	if err != nil {
-		t.Fatalf("Failed to create file editor: %v", err)
-	}
-
 	// Create Feed
 	ctx := context.Background()
 	feed, err := NewFeedWithOptions(ctx, "test-feed", "at://did:plc:test/app.bsky.feed.generator/test", FeedOptions{
-		Config:      config,
-		StoreEditor: fileEditor,
+		Config: config,
 	})
 
 	if err != nil {
@@ -107,6 +97,22 @@ func TestFeedIntegration(t *testing.T) {
 		t.Errorf("Failed to clear feed: %v", err)
 	}
 
+	// Trim feed
+	for i := 0; i < 3; i++ {
+		if err := feed.AddPost("did:plc:user1", fmt.Sprintf("trimpost%d", i), fmt.Sprintf("cid%d", i), time.Now(), nil); err != nil {
+			t.Errorf("Failed to add post: %v", err)
+		}
+	}
+	if err := feed.Trim(1); err != nil {
+		t.Errorf("Failed to trim feed: %v", err)
+	}
+	if count := feed.PostCount(); count != 1 {
+		t.Errorf("Expected post count to be 1 after trim, got %d", count)
+	}
+	if err := feed.Trim(-1); err == nil {
+		t.Error("Expected error when trimming with negative remain")
+	}
+
 	// config
 	cfg := feed.Config()
 	if cfg == nil {
@@ -129,18 +135,10 @@ func TestFeedFiltering(t *testing.T) {
 	// Create test configuration
 	config := createTestConfig(t)
 
-	// Create in-memory store
-	dir := t.TempDir()
-	fileEditor, err := editor.NewFileEditor(dir, slog.Default())
-	if err != nil {
-		t.Fatalf("Failed to create file editor: %v", err)
-	}
-
 	// Create Feed
 	ctx := context.Background()
 	feed, err := NewFeedWithOptions(ctx, "test-filter", "at://did:plc:test/app.bsky.feed.generator/filter", FeedOptions{
-		Config:      config,
-		StoreEditor: fileEditor,
+		Config: config,
 	})
 
 	if err != nil {

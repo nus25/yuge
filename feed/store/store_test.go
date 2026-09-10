@@ -9,69 +9,25 @@ import (
 
 	"log/slog"
 
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/types"
 )
 
-// Mocks
-type MockEditor struct {
-	posts []types.Post
+type MockLoader struct {
+	posts       []types.Post
+	loadCalls   int
+	lastFeedID  string
+	lastFeedURI types.FeedUri
+	lastLimit   int
 }
 
-func (m *MockEditor) Open(ctx context.Context) error {
-	return nil
-}
-
-func (m *MockEditor) Load(ctx context.Context, params editor.LoadParams) ([]types.Post, error) {
-	return m.posts, nil
-}
-
-func (m *MockEditor) Save(ctx context.Context, params editor.SaveParams) error {
-	m.posts = params.Posts
-	return nil
-}
-
-func (m *MockEditor) Add(params editor.PostParams) error {
-	m.posts = append(m.posts, types.Post{
-		Feed:      params.FeedUri,
-		Uri:       types.PostUri("at://" + params.Did + "/app.bsky.feed.post/" + params.Rkey),
-		Cid:       params.Cid,
-		IndexedAt: params.IndexedAt.Format(time.RFC3339),
-	})
-	return nil
-}
-
-func (m *MockEditor) Delete(params editor.DeleteParams) error {
-	for i, p := range m.posts {
-		if string(p.Uri) == "at://"+params.Did+"/app.bsky.feed.post/"+params.Rkey {
-			m.posts = append(m.posts[:i], m.posts[i+1:]...)
-			break
-		}
-	}
-	return nil
-}
-
-func (m *MockEditor) DeleteByDid(feedUri types.FeedUri, did string) error {
-	var remainingPosts []types.Post
-	for _, p := range m.posts {
-		if !strings.HasPrefix(string(p.Uri), "at://"+did+"/") {
-			remainingPosts = append(remainingPosts, p)
-		}
-	}
-	m.posts = remainingPosts
-	return nil
-}
-
-func (m *MockEditor) Trim(params editor.TrimParams) error {
-	count := params.Count
-	if len(m.posts) > count {
-		m.posts = m.posts[:count]
-	}
-	return nil
-}
-
-func (m *MockEditor) Close(ctx context.Context) error {
-	return nil
+func (m *MockLoader) LoadPosts(ctx context.Context, params LoadPostsParams) ([]types.Post, error) {
+	m.loadCalls++
+	m.lastFeedID = params.FeedID
+	m.lastFeedURI = params.FeedURI
+	m.lastLimit = params.Limit
+	posts := make([]types.Post, len(m.posts))
+	copy(posts, m.posts)
+	return posts, nil
 }
 
 // tests
@@ -83,7 +39,6 @@ func TestStore(t *testing.T) {
 			Logger:  logger,
 			FeedId:  "test",
 			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
-			Editor:  &MockEditor{},
 		}
 		s, err := NewStore(ctx, storeOpts)
 		if err != nil {
@@ -122,7 +77,6 @@ func TestStore(t *testing.T) {
 		storeOpts := StoreOptions{
 			Logger: logger,
 			FeedId: "test",
-			Editor: &MockEditor{},
 		}
 		s, err := NewStore(ctx, storeOpts)
 		if err != nil {
@@ -132,6 +86,58 @@ func TestStore(t *testing.T) {
 		err = s.Load(ctx)
 		if err == nil {
 			t.Error("expected error when loading with no feed uri")
+		}
+	})
+
+	t.Run("load without loader starts empty", func(t *testing.T) {
+		storeOpts := StoreOptions{
+			Logger:  logger,
+			FeedId:  "test",
+			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
+		}
+		s, err := NewStore(ctx, storeOpts)
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+
+		if err := s.Load(ctx); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if posts := s.List(""); len(posts) != 0 {
+			t.Fatalf("List() len = %d, want 0 when no authoritative loader is configured", len(posts))
+		}
+	})
+
+	t.Run("load uses configured loader", func(t *testing.T) {
+		mockLoader := &MockLoader{posts: []types.Post{{
+			Feed:      types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
+			Uri:       types.PostUri("at://did:plc:loader/app.bsky.feed.post/from-loader"),
+			Cid:       "cid-loader",
+			IndexedAt: "2026-05-11T09:00:00Z",
+		}}}
+		storeOpts := StoreOptions{
+			Logger:  logger,
+			FeedId:  "test",
+			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
+			Loader:  mockLoader,
+		}
+		s, err := NewStore(ctx, storeOpts)
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+
+		if err := s.Load(ctx); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if mockLoader.loadCalls != 1 {
+			t.Fatalf("loader LoadPosts() calls = %d, want 1", mockLoader.loadCalls)
+		}
+		posts := s.List("")
+		if len(posts) != 1 {
+			t.Fatalf("List() len = %d, want 1", len(posts))
+		}
+		if posts[0].Uri != types.PostUri("at://did:plc:loader/app.bsky.feed.post/from-loader") {
+			t.Fatalf("List()[0].Uri = %s, want loader-backed post", posts[0].Uri)
 		}
 	})
 
@@ -170,13 +176,11 @@ func TestStore(t *testing.T) {
 		}
 	})
 
-	t.Run("with editor", func(t *testing.T) {
-		mockEditor := &MockEditor{}
+	t.Run("shutdown is a no-op without persistence bridge", func(t *testing.T) {
 		storeOpts := StoreOptions{
 			Logger:  logger,
 			FeedId:  "test",
 			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
-			Editor:  mockEditor,
 		}
 		s, err := NewStore(ctx, storeOpts)
 		if err != nil {
@@ -200,6 +204,62 @@ func TestStore(t *testing.T) {
 		err = s.Shutdown(ctx)
 		if err != nil {
 			t.Fatalf("failed to shutdown store: %v", err)
+		}
+	})
+
+	t.Run("incremental mutations stay in cache until shutdown", func(t *testing.T) {
+		storeOpts := StoreOptions{
+			Logger:  logger,
+			FeedId:  "test",
+			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
+		}
+		s, err := NewStore(ctx, storeOpts)
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+
+		now := time.Now()
+		if err := s.Add("did:plc:1234", "test1", "cid-1", now, []string{"ja"}); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+		if err := s.Add("did:plc:5678", "test2", "cid-2", now, []string{"en"}); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+		if err := s.Delete("did:plc:1234", "test1"); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		if _, err := s.DeleteByDid("did:plc:5678"); err != nil {
+			t.Fatalf("DeleteByDid() error = %v", err)
+		}
+		if err := s.Trim(0); err != nil {
+			t.Fatalf("Trim() error = %v", err)
+		}
+
+		if err := s.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+		if got := len(s.List("")); got != 0 {
+			t.Fatalf("List() len after Trim+Shutdown = %d, want 0", got)
+		}
+	})
+
+	t.Run("shutdown with loader remains a no-op", func(t *testing.T) {
+		mockLoader := &MockLoader{}
+		storeOpts := StoreOptions{
+			Logger:  logger,
+			FeedId:  "test",
+			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
+			Loader:  mockLoader,
+		}
+		s, err := NewStore(ctx, storeOpts)
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+		if err := s.Add("did:plc:1234", "test1", "cid-1", time.Now(), []string{"ja"}); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+		if err := s.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
 		}
 	})
 }
@@ -280,13 +340,11 @@ func TestList(t *testing.T) {
 func TestDeleteByDid(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
-	mockEditor := MockEditor{}
 	t.Run("delete posts by did", func(t *testing.T) {
 		storeOpts := StoreOptions{
 			Logger:  logger,
 			FeedId:  "test",
 			FeedUri: types.FeedUri("at://did:plc:1234/app.bsky.feed.generator/test"),
-			Editor:  &mockEditor,
 		}
 		s, err := NewStore(ctx, storeOpts)
 		if err != nil {

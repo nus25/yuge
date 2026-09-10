@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/goccy/go-yaml"
@@ -150,6 +151,31 @@ func TestPDSProviderLoad(t *testing.T) {
 
 		if provider != nil || err == nil {
 			t.Error("expected error, but nil was returned")
+		}
+	})
+
+	t.Run("PDS record not found", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"RecordNotFound","message":"Could not locate record"}`))
+		}))
+		defer server.Close()
+
+		uri := "at://repo/app.bsky.feed.generator/dev-not-exist"
+		provider, err := NewPDSFeedConfigProviderWithBaseURL(uri, server.URL)
+
+		if provider != nil {
+			t.Error("expected provider to be nil")
+		}
+		if err == nil {
+			t.Fatal("expected error, but nil was returned")
+		}
+		if !strings.Contains(err.Error(), "PDS returned 400") {
+			t.Errorf("error = %q, want HTTP status", err)
+		}
+		if !strings.Contains(err.Error(), "RecordNotFound") {
+			t.Errorf("error = %q, want response body", err)
 		}
 	})
 

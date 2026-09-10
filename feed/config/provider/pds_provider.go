@@ -77,6 +77,9 @@ func (p *PDSFeedConfigProvider) Load() (types.FeedConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("PDS returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
 
 	// Parse JSON
 	var record struct {

@@ -13,7 +13,6 @@ import (
 	"github.com/nus25/yuge/feed/logicblock"
 	"github.com/nus25/yuge/feed/metrics"
 	"github.com/nus25/yuge/feed/store"
-	"github.com/nus25/yuge/feed/store/editor"
 	"github.com/nus25/yuge/types"
 )
 
@@ -35,6 +34,8 @@ type Feed interface {
 	PostCount() int
 	Shutdown(ctx context.Context) error
 	Clear() error
+	// Trim keeps only the newest `remain` posts, deleting the rest.
+	Trim(remain int) error
 	Config() cfgTypes.FeedConfig
 	Metrics() *metrics.Metrics
 	ProcessCommand(logicBlockName string, command string, args map[string]string) (message string, err error)
@@ -53,8 +54,8 @@ type FeedOptions struct {
 	// feed configuration.
 	Config cfgTypes.FeedConfig
 
-	// StoreEditor is the interface for storing and retrieving feed data.
-	StoreEditor editor.StoreEditor
+	// StoreLoader hydrates the in-memory cache from an authoritative source.
+	StoreLoader store.PostLoader
 
 	// Logger is an optional logger for feed operations.
 	// If not specified, slog.Default() will be used.
@@ -96,7 +97,7 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 		FeedId:  feedId,
 		FeedUri: types.FeedUri(feedUri),
 		Config:  cfg.Store(),
-		Editor:  opts.StoreEditor,
+		Loader:  opts.StoreLoader,
 		Logger:  lg,
 	}
 	s, err := store.NewStore(ctx, storeOpts)
@@ -183,6 +184,14 @@ func (f *feedImpl) Clear() error {
 		}
 	}
 	return nil
+}
+
+func (f *feedImpl) Trim(remain int) error {
+	if remain < 0 {
+		return errors.NewDependencyError("Feed", "remain", "remain must be greater than or equal to 0")
+	}
+	f.logger.Info("trimming feed", "remain", remain)
+	return f.store.Trim(remain)
 }
 
 func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {

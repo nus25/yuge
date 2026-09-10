@@ -20,6 +20,12 @@
       padding: 5px 10px;
     }
 
+    button.danger {
+      background: #c0392b;
+      color: white;
+      border: none;
+    }
+
     input {
       margin: 5px 0;
       padding: 5px;
@@ -29,10 +35,58 @@
       background: #f4f4f4;
       padding: 10px;
       border: 1px solid #ddd;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    pre.scrollable {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin: 10px 0;
+      width: 100%;
+    }
+
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 6px 10px;
+      text-align: left;
+    }
+
+    th {
+      background: #f0f0f0;
+    }
+
+    fieldset {
+      margin: 10px 0;
+      padding: 10px;
     }
 
     #apiBaseContainer {
       margin-bottom: 20px;
+    }
+
+    #feedContextContainer {
+      margin-bottom: 20px;
+      padding: 10px;
+      border: 2px solid #1565c0;
+      border-radius: 4px;
+      background: #e3f2fd;
+      transition: opacity 0.2s;
+    }
+
+    #feedContextContainer.irrelevant {
+      opacity: 0.4;
+    }
+
+    #feedContextContainer .hint {
+      font-size: 0.85em;
+      color: #555;
+      margin: 0 0 5px 0;
     }
 
     select {
@@ -52,20 +106,155 @@
     <button onclick="setApiBase()">Set</button>
     <p id="apiBaseDisplay" style="color: green"></p>
   </div>
-  <div id="feedIdContainer"></div>
-  <label for="feedIdInput"><strong>Feed ID:</strong></label>
-  <select id="feedIdInput" onchange="showSelectedFeedInfo()">
-    <option value="">Select a feed</option>
-  </select>
-  <pre id="selectedFeedInfo"></pre>
+
+  <!-- フィードに紐づく操作対象(Feeds/Postsタブで使用) -->
+  <div id="feedContextContainer">
+    <label for="feedIdInput"><strong>Feed ID:</strong></label>
+    <select id="feedIdInput" onchange="showSelectedFeedInfo()">
+      <option value="">Select a feed</option>
+    </select>
+    <pre id="selectedFeedInfo"></pre>
+  </div>
+
+  <!-- タブ切り替え -->
+  <div class="tab-buttons">
+    <button id="feedsTab" class="tab-button active" onclick="switchTab('feeds')">Feeds</button>
+    <button id="postTab" class="tab-button" onclick="switchTab('post')">Posts</button>
+    <button id="projectionOpsTab" class="tab-button" onclick="switchTab('projectionOps')">Projection Ops</button>
+    <button id="jetstreamTab" class="tab-button" onclick="switchTab('jetstream')">Jetstream</button>
+  </div>
+
+  <!-- Feed management APIs -->
+  <div id="feedsContent" class="tab-content active">
+    <fieldset>
+      <legend>選択中フィードの操作: <strong id="feedActionTarget">(未選択)</strong></legend>
+      <div id="feedStatus">
+        <label for="feedStatusSelect">Status:</label>
+        <select id="feedStatusSelect">
+          <option value="active">active</option>
+          <option value="inactive">inactive</option>
+        </select>
+        <button onclick="updateFeedStatus()">Update Status</button>
+      </div>
+      <div id="feedReload">
+        <label for="feedReloadButton">Reload:</label>
+        <button onclick="reloadFeed()">Reload</button>
+      </div>
+      <div id="feedConfig">
+        <label for="feedConfigButton">Config:</label>
+        <button onclick="getFeedConfig()">Get Config</button>
+      </div>
+      <div id="feedTrim">
+        <label for="feedTrimButton">Trim:</label>
+        <label for="feedTrimRemainInput">Remain:</label>
+        <input type="number" id="feedTrimRemainInput" min="0" step="1" value="0" style="width:6em;">
+        <button class="danger" onclick="trimFeed()">Trim</button>
+      </div>
+      <div id="dangerZone">
+        <button class="danger" onclick="clearFeed()">Clear posts</button>
+        <button class="danger" onclick="deleteFeed()">Delete Feed</button>
+      </div>
+      <pre id="feedActionResult"></pre>
+    </fieldset>
+
+    <h2>Feed List</h2>
+    <button onclick="loadFeedList()">Refresh</button>
+    <table id="feedListTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Status</th>
+          <th>URI</th>
+          <th>Last Updated</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody id="feedListBody"></tbody>
+    </table>
+
+    <fieldset>
+      <legend>フィード登録 (PUT /api/feed/:feedid)</legend>
+      <label for="registerFeedId">Feed ID:</label>
+      <input type="text" id="registerFeedId" placeholder="myfeed" />
+      <label for="registerFeedUri">URI:</label>
+      <input type="text" id="registerFeedUri" placeholder="at://did:plc:.../app.bsky.feed.generator/myfeed" size="50" />
+      <label for="registerFeedConfigFile">Config File:</label>
+      <input type="text" id="registerFeedConfigFile" placeholder="feedConfig.yaml" />
+      <label for="registerFeedInactiveStart">Inactive Start:</label>
+      <input type="checkbox" id="registerFeedInactiveStart" />
+      <button onclick="registerFeed()">Register</button>
+      <pre id="registerFeedResult"></pre>
+    </fieldset>
+
+
+  </div>
+
+  <!-- Jetstream control -->
+  <div id="jetstreamContent" class="tab-content">
+    <h2>Jetstream 接続制御</h2>
+    <button onclick="getJetstreamStatus()">Refresh Status</button>
+    <pre id="jetstreamStatusResult"></pre>
+
+    <fieldset>
+      <legend>接続操作</legend>
+      <label for="jetstreamUrl">Websocket URL (optional):</label>
+      <input type="text" id="jetstreamUrl" placeholder="wss://jetstream2.us-east.bsky.network/subscribe" size="50" />
+      <label for="jetstreamCursor">Cursor (optional):</label>
+      <input type="text" id="jetstreamCursor" placeholder="1234567890" />
+      <button onclick="connectJetstream()">Connect</button>
+      <button class="danger" onclick="disconnectJetstream()">Disconnect</button>
+      <pre id="jetstreamActionResult"></pre>
+    </fieldset>
+  </div>
+
+  <!-- Projection ops monitoring -->
+  <div id="projectionOpsContent" class="tab-content">
+    <h2>Projectionオペレーション監視</h2>
+    <label for="projectionOpsTarget">Target:</label>
+    <input type="text" id="projectionOpsTarget" value="gyoka" />
+    <label for="projectionOpsStatus">Status:</label>
+    <select id="projectionOpsStatus">
+      <option value="failed">failed</option>
+      <option value="pending">pending</option>
+      <option value="processing">processing</option>
+      <option value="dead">dead</option>
+      <option value="completed">completed</option>
+    </select>
+    <label for="projectionOpsLimit">Limit:</label>
+    <input type="text" id="projectionOpsLimit" value="100" size="5" />
+    <button onclick="loadProjectionOpsSummary()">Get Summary</button>
+    <button onclick="loadProjectionOpsList()">List</button>
+    <pre id="projectionOpsSummaryResult"></pre>
+
+    <table id="projectionOpsTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Feed</th>
+          <th>Operation</th>
+          <th>Status</th>
+          <th>Retry</th>
+          <th>Last Error</th>
+          <th>Updated At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="projectionOpsBody"></tbody>
+    </table>
+
+    <fieldset>
+      <legend>完了済みオペレーションの一括削除</legend>
+      <button class="danger" onclick="purgeCompletedProjectionOps()">Purge Completed</button>
+      <pre id="projectionOpsActionResult"></pre>
+    </fieldset>
   </div>
 
   <!-- Post related APIs -->
-  <div id="postContent" class="tab-content active" style="display: none;">
+  <div id="postContent" class="tab-content">
     <!-- GET /post -->
     <h2>1. GET /api/feed/:feedid/post</h2>
     <button onclick="getPostList()">Get Post List</button>
-    <pre id="postListResult"></pre>
+    <pre id="postListResult" class="scrollable"></pre>
 
     <!-- GET /post/:did -->
     <h2>2. GET /api/feed/:feedid/post/:did</h2>
@@ -153,12 +342,29 @@
         content.classList.remove('active');
       });
       document.getElementById(tabName + 'Content').classList.add('active');
+
+      // フィード選択に依存しないタブでは対象フィードの表示を控えめにする
+      const feedIndependentTabs = ['jetstream', 'projectionOps'];
+      document.getElementById('feedContextContainer').classList.toggle('irrelevant', feedIndependentTabs.includes(tabName));
     }
   </script>
 
   <script>
     let apiBase = "";
     let feedList = [];
+
+    // レスポンスをJSONとしてパースできれば整形して表示し、できなければそのまま表示する
+    async function renderResult(elementId, res) {
+      const text = await res.text();
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+        document.getElementById(elementId).innerText = JSON.stringify(parsed, null, 2);
+      } catch (error) {
+        document.getElementById(elementId).innerText = text;
+      }
+      return parsed;
+    }
 
     function showSelectedFeedInfo() {
       const feedId = document.getElementById("feedIdInput").value;
@@ -179,50 +385,285 @@
       } else {
         document.getElementById("selectedFeedInfo").innerText = "";
       }
+      updateFeedActionTarget(selectedFeed);
+    }
+
+    function updateFeedActionTarget(selectedFeed) {
+      const label = document.getElementById("feedActionTarget");
+      if (selectedFeed) {
+        label.innerText = selectedFeed.id;
+        label.style.color = "#2e7d32";
+        if (selectedFeed.status) {
+          const status = selectedFeed.status.lastStatus;
+          document.getElementById("feedStatusSelect").value = (status === "active" || status === "inactive") ? status : "active";
+        }
+      } else {
+        label.innerText = "(未選択)";
+        label.style.color = "#c0392b";
+      }
     }
 
     // set API base URL
     async function setApiBase() {
       const input = document.getElementById("apiBaseInput").value.trim();
-      if (input) {
-        apiBase = input;
-        document.getElementById(
-          "apiBaseDisplay"
-        ).innerText = `Current API base URL: ${apiBase}`;
-
-        // get feed info and display
-        try {
-          const res = await fetch(`${apiBase}/api/feed/`);
-          const data = await res.json();
-
-          // update feed ID select options
-          const feedIdSelect = document.getElementById("feedIdInput");
-          feedIdSelect.innerHTML = '<option value="">Select a feed</option>';
-
-          // Add all available feed IDs to select options
-          if (Array.isArray(data)) {
-            feedList = data;
-            data.forEach(feed => {
-              const option = document.createElement('option');
-              option.value = feed.id;
-              option.textContent = feed.id;
-              feedIdSelect.appendChild(option);
-            });
-          }
-
-          // If there's a default feedId, select it
-          const defaultFeed = data[0];
-          if (defaultFeed) {
-            feedIdSelect.value = defaultFeed.id;
-            showSelectedFeedInfo();
-            document.getElementById("postContent").style.display = "block";
-          }
-        } catch (error) {
-          document.getElementById("feedInfoResult").innerText = "Failed to get feed info.";
-        }
-      } else {
+      if (!input) {
         alert("Please input API base URL.");
+        return;
       }
+      apiBase = input;
+      document.getElementById(
+        "apiBaseDisplay"
+      ).innerText = `Current API base URL: ${apiBase}`;
+      await loadFeedList();
+    }
+
+    function requireFeedId() {
+      const feedid = document.getElementById("feedIdInput").value;
+      if (!feedid) {
+        alert("Please select a feed.");
+        return null;
+      }
+      return feedid;
+    }
+
+    // load feed list and populate the select box / table
+    async function loadFeedList() {
+      if (!apiBase) return alert("API base URL is not set.");
+      try {
+        const res = await fetch(`${apiBase}/api/feed/`);
+        const data = await res.json();
+
+        const feedIdSelect = document.getElementById("feedIdInput");
+        const currentSelection = feedIdSelect.value;
+        feedIdSelect.innerHTML = '<option value="">Select a feed</option>';
+
+        feedList = Array.isArray(data) ? data : [];
+        feedList.forEach(feed => {
+          const option = document.createElement('option');
+          option.value = feed.id;
+          option.textContent = feed.id;
+          feedIdSelect.appendChild(option);
+        });
+
+        const restored = feedList.find(f => f.id === currentSelection);
+        feedIdSelect.value = restored ? currentSelection : (feedList[0] ? feedList[0].id : "");
+        showSelectedFeedInfo();
+        renderFeedListTable();
+      } catch (error) {
+        document.getElementById("selectedFeedInfo").innerText = "Failed to get feed list.";
+      }
+    }
+
+    function renderFeedListTable() {
+      const tbody = document.getElementById("feedListBody");
+      tbody.innerHTML = "";
+      feedList.forEach(feed => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${feed.id}</td>
+          <td>${feed.status ? feed.status.lastStatus : ""}</td>
+          <td>${feed.definition ? feed.definition.uri : ""}</td>
+          <td>${feed.status ? feed.status.lastUpdated : ""}</td>
+          <td>${feed.status && feed.status.error ? feed.status.error : ""}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Feed management functions
+    async function registerFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedId = document.getElementById("registerFeedId").value.trim();
+      const uri = document.getElementById("registerFeedUri").value.trim();
+      const configFile = document.getElementById("registerFeedConfigFile").value.trim();
+      const inactiveStart = document.getElementById("registerFeedInactiveStart").checked;
+      if (!feedId || !uri) {
+        alert("Please input feed ID and URI.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/api/feed/${feedId}`, {
+        method: "PUT",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uri, configFile, inactiveStart })
+      });
+      await renderResult("registerFeedResult", res);
+      await loadFeedList();
+    }
+
+    async function updateFeedStatus() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      const status = document.getElementById("feedStatusSelect").value;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/status`, {
+        method: "PATCH",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      await renderResult("feedActionResult", res);
+      await loadFeedList();
+    }
+
+    async function reloadFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/reload`, { method: "POST" });
+      await renderResult("feedActionResult", res);
+      await loadFeedList();
+    }
+
+    async function clearFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      if (!confirm(`フィード「${feedid}」の投稿データを全て削除します。よろしいですか?`)) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/clear`, { method: "POST" });
+      await renderResult("feedActionResult", res);
+    }
+
+    async function trimFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      const remain = parseInt(document.getElementById("feedTrimRemainInput").value, 10);
+      if (isNaN(remain) || remain < 0) return alert("Remain must be a non-negative integer.");
+      if (!confirm(`フィード「${feedid}」の投稿データを新しい${remain}件を残して削除します。よろしいですか?`)) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/trim?remain=${remain}`, { method: "POST" });
+      await renderResult("feedActionResult", res);
+    }
+
+    async function deleteFeed() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      if (!confirm(`フィード「${feedid}」を削除します。この操作は取り消せません。よろしいですか?`)) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}`, { method: "DELETE" });
+      await renderResult("feedActionResult", res);
+      await loadFeedList();
+    }
+
+    async function getFeedConfig() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const feedid = requireFeedId();
+      if (!feedid) return;
+      const res = await fetch(`${apiBase}/api/feed/${feedid}/config`);
+      await renderResult("feedActionResult", res);
+    }
+
+    // Jetstream control functions
+    async function getJetstreamStatus() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const res = await fetch(`${apiBase}/api/jetstream/status`);
+      const parsed = await renderResult("jetstreamStatusResult", res);
+      if (parsed && parsed.websocketURL && !document.getElementById("jetstreamUrl").value) {
+        document.getElementById("jetstreamUrl").value = parsed.websocketURL;
+      }
+    }
+
+    async function connectJetstream() {
+      if (!apiBase) return alert("API base URL is not set.");
+      if (!confirm("Jetstreamへ接続します。よろしいですか?")) return;
+      const urlInput = document.getElementById("jetstreamUrl").value.trim();
+      const cursorInput = document.getElementById("jetstreamCursor").value.trim();
+      const body = {};
+      if (urlInput) {
+        body.url = urlInput;
+      }
+      if (cursorInput) {
+        const cursor = Number(cursorInput);
+        if (Number.isNaN(cursor)) {
+          alert("Cursor must be a number.");
+          return;
+        }
+        body.cursor = cursor;
+      }
+      const res = await fetch(`${apiBase}/api/jetstream/connect`, {
+        method: "POST",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      await renderResult("jetstreamActionResult", res);
+    }
+
+    async function disconnectJetstream() {
+      if (!apiBase) return alert("API base URL is not set.");
+      if (!confirm("Jetstreamから切断します。投稿の取り込みが停止します。よろしいですか?")) return;
+      const res = await fetch(`${apiBase}/api/jetstream/disconnect`, { method: "POST" });
+      await renderResult("jetstreamActionResult", res);
+    }
+
+    // Projection ops functions
+    function projectionOpsParams() {
+      return {
+        target: document.getElementById("projectionOpsTarget").value.trim() || "gyoka",
+        status: document.getElementById("projectionOpsStatus").value,
+        limit: document.getElementById("projectionOpsLimit").value.trim() || "100"
+      };
+    }
+
+    async function loadProjectionOpsSummary() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const { target } = projectionOpsParams();
+      const res = await fetch(`${apiBase}/api/admin/projection/ops/summary?target=${encodeURIComponent(target)}`);
+      await renderResult("projectionOpsSummaryResult", res);
+    }
+
+    async function loadProjectionOpsList() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const { target, status, limit } = projectionOpsParams();
+      const res = await fetch(`${apiBase}/api/admin/projection/ops?target=${encodeURIComponent(target)}&status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}`);
+      const parsed = await res.json().catch(() => null);
+      renderProjectionOpsTable(parsed && Array.isArray(parsed.entries) ? parsed.entries : []);
+    }
+
+    function renderProjectionOpsTable(entries) {
+      const tbody = document.getElementById("projectionOpsBody");
+      tbody.innerHTML = "";
+      entries.forEach(entry => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${entry.id}</td>
+          <td>${entry.feedId}</td>
+          <td>${entry.operation}</td>
+          <td>${entry.status}</td>
+          <td>${entry.retryCount}</td>
+          <td>${entry.lastError || ""}</td>
+          <td>${entry.updatedAt}</td>
+          <td>
+            <button onclick="retryProjectionOp(${entry.id})">Retry</button>
+            <button class="danger" onclick="deleteProjectionOp(${entry.id})">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function retryProjectionOp(id) {
+      if (!apiBase) return alert("API base URL is not set.");
+      if (!confirm(`projection op #${id} を再試行キューに戻します。よろしいですか?`)) return;
+      await fetch(`${apiBase}/api/admin/projection/ops/${id}/retry`, { method: "POST" });
+      await loadProjectionOpsList();
+    }
+
+    async function deleteProjectionOp(id) {
+      if (!apiBase) return alert("API base URL is not set.");
+      if (!confirm(`projection op #${id} を削除します。この操作は取り消せません。よろしいですか?`)) return;
+      await fetch(`${apiBase}/api/admin/projection/ops/${id}`, { method: "DELETE" });
+      await loadProjectionOpsList();
+    }
+
+    async function purgeCompletedProjectionOps() {
+      if (!apiBase) return alert("API base URL is not set.");
+      const { target, limit } = projectionOpsParams();
+      if (!confirm(`target=${target} の完了済みprojectionオペレーションを一括削除します。よろしいですか?`)) return;
+      const res = await fetch(`${apiBase}/api/admin/projection/ops/purge-completed`, {
+        method: "POST",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, limit: Number(limit) || 100 })
+      });
+      await renderResult("projectionOpsActionResult", res);
+      await loadProjectionOpsList();
     }
 
     // Post related functions
@@ -234,8 +675,7 @@
         return;
       }
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post`);
-      const data = await res.text();
-      document.getElementById("postListResult").innerText = data;
+      await renderResult("postListResult", res);
     }
 
     async function getPostByDid() {
@@ -247,8 +687,7 @@
         return;
       }
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}`);
-      const data = await res.text();
-      document.getElementById("postByDidResult").innerText = data;
+      await renderResult("postByDidResult", res);
     }
 
     async function getPostByDidRkey() {
@@ -261,8 +700,7 @@
         return;
       }
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`);
-      const data = await res.text();
-      document.getElementById("postByDidRkeyResult").innerText = data;
+      await renderResult("postByDidRkeyResult", res);
     }
 
     async function addPost() {
@@ -284,8 +722,7 @@
           indexedAt: document.getElementById("postPostIndexedAt").value || new Date().toISOString()
         })
       });
-      const data = await res.text();
-      document.getElementById("addPostResult").innerText = data;
+      await renderResult("addPostResult", res);
     }
 
     async function deletePostByDid() {
@@ -299,8 +736,7 @@
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}`, {
         method: "DELETE"
       });
-      const data = await res.text();
-      document.getElementById("deletePostByDidResult").innerText = data;
+      await renderResult("deletePostByDidResult", res);
     }
 
     async function deletePostByDidRkey() {
@@ -315,8 +751,7 @@
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`, {
         method: "DELETE"
       });
-      const data = await res.text();
-      document.getElementById("deletePostByDidRkeyResult").innerText = data;
+      await renderResult("deletePostByDidRkeyResult", res);
     }
 
     // set API base URL from href

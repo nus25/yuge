@@ -1,6 +1,8 @@
 package watchlist
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -192,4 +194,77 @@ func TestWatchlist(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestWatchlist_ConcurrentAccess reproduces the production panic
+// (fatal error: concurrent map read and map write) under concurrent load.
+func TestWatchlist_ConcurrentAccess(t *testing.T) {
+	w, err := NewWatchlist(50 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("failed to create watchlist: %v", err)
+	}
+	defer w.Stop()
+
+	const numDIDs = 200
+	dids := make([]string, numDIDs)
+	for i := range dids {
+		dids[i] = fmt.Sprintf("did:plc:concurrent-%d", i)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writers: Add/Delete concurrently.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					did := dids[worker%numDIDs]
+					w.Add(did, "rkey")
+					w.Delete(did)
+				}
+			}
+		}(i)
+	}
+
+	// Readers: Contains triggers expiry deletes internally.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					did := dids[worker%numDIDs]
+					w.Contains(did)
+				}
+			}
+		}(i)
+	}
+
+	// Also exercise Reflesh/List/UpdatExpireDuration concurrently.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = w.Reflesh()
+				w.List()
+			}
+		}
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }
