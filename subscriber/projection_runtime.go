@@ -50,6 +50,8 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 		metricsInterval = defaultProjectionMetricsInterval
 	}
 	completedRetention := projectionCompletedRetention(opts)
+	logger.Info("using projection completed retention", "target", "gyoka", "duration", completedRetention)
+
 	gyokaEditor, err := gyoka.NewGyokaEditor(parentCtx, config, logger, opts.clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create gyoka editor: %w", err)
