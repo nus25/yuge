@@ -88,8 +88,9 @@ type DeleteParams struct {
 }
 
 type PurgeCompletedParams struct {
-	Target string
-	Limit  int
+	Target          string
+	Limit           int
+	CompletedBefore time.Time
 }
 
 type CountByStatusParams struct {

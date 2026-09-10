@@ -420,16 +420,24 @@ func (r *OutboxRepository) PurgeCompleted(ctx context.Context, params projection
 	if params.Limit <= 0 {
 		return 0, fmt.Errorf("purge completed outbox entries: limit must be positive")
 	}
-	result, err := r.db.ExecContext(ctx, `
+	query := `
 		DELETE FROM projection_outbox
 		WHERE id IN (
 			SELECT id
 			FROM projection_outbox
 			WHERE target = ? AND status = 'completed'
-			ORDER BY id ASC
+	`
+	args := []any{params.Target}
+	if !params.CompletedBefore.IsZero() {
+		query += "\t\t\tAND completed_at < ?\n"
+		args = append(args, params.CompletedBefore.UTC().Format(time.RFC3339Nano))
+	}
+	query += `			ORDER BY id ASC
 			LIMIT ?
 		);
-	`, params.Target, params.Limit)
+	`
+	args = append(args, params.Limit)
+	result, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("purge completed outbox entries: %w", err)
 	}

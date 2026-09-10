@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3" // Register the SQLite driver for upcoming SQLite-backed persistence.
 	"github.com/nus25/yuge/subscriber"
@@ -76,6 +77,12 @@ func run(args []string) {
 						Usage:   "enqueue imported legacy posts into projection_outbox for replay during startup",
 						Value:   false,
 						EnvVars: []string{"IMPORT_LEGACY_STORE_ENQUEUE_PROJECTION"},
+					},
+					&cli.DurationFlag{
+						Name:    "projection-completed-retention",
+						Usage:   "retain completed projection operations for this duration",
+						Value:   7 * 24 * time.Hour,
+						EnvVars: []string{"PROJECTION_COMPLETED_RETENTION"},
 					},
 					&cli.StringFlag{
 						Name:    "api-listen-addr",

@@ -16,11 +16,15 @@ import (
 
 const defaultProjectionPollInterval = 250 * time.Millisecond
 const defaultProjectionMetricsInterval = 30 * time.Second
+const defaultProjectionPurgeInterval = time.Hour
+const defaultProjectionCompletedRetention = 7 * 24 * time.Hour
+const defaultProjectionPurgeBatchSize = 1000
 
 type gyokaProjectionRuntimeOptions struct {
-	pollInterval    time.Duration
-	metricsInterval time.Duration
-	clientOptions   []gyoka.ClientOptionFunc
+	pollInterval       time.Duration
+	metricsInterval    time.Duration
+	completedRetention time.Duration
+	clientOptions      []gyoka.ClientOptionFunc
 }
 
 type gyokaProjectionRuntime struct {
@@ -45,6 +49,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	if metricsInterval <= 0 {
 		metricsInterval = defaultProjectionMetricsInterval
 	}
+	completedRetention := projectionCompletedRetention(opts)
 	gyokaEditor, err := gyoka.NewGyokaEditor(parentCtx, config, logger, opts.clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create gyoka editor: %w", err)
@@ -63,6 +68,7 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	go func() {
 		defer close(done)
 		nextMetricsCollection := time.Time{}
+		nextPurge := time.Time{}
 		for {
 			select {
 			case <-runCtx.Done():
@@ -76,6 +82,15 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 					logger.Warn("failed to collect projection outbox metrics", "target", "gyoka", "error", err)
 				}
 				nextMetricsCollection = now.Add(metricsInterval)
+			}
+			if nextPurge.IsZero() || !now.Before(nextPurge) {
+				deletedCount, err := purgeExpiredProjectionOps(runCtx, repo, "gyoka", now, completedRetention)
+				if err != nil && !errors.Is(err, context.Canceled) {
+					logger.Warn("failed to purge expired projection outbox entries", "target", "gyoka", "error", err)
+				} else if deletedCount > 0 {
+					logger.Info("purged expired projection outbox entries", "target", "gyoka", "deletedCount", deletedCount)
+				}
+				nextPurge = now.Add(defaultProjectionPurgeInterval)
 			}
 
 			result, err := service.ProcessNextPendingStep(runCtx)
@@ -124,6 +139,28 @@ func startGyokaProjectionRuntime(parentCtx context.Context, logger *slog.Logger,
 	}()
 
 	return &gyokaProjectionRuntime{cancel: cancel, done: done, editor: gyokaEditor, logger: logger}, nil
+}
+
+func projectionCompletedRetention(opts gyokaProjectionRuntimeOptions) time.Duration {
+	if opts.completedRetention <= 0 {
+		return defaultProjectionCompletedRetention
+	}
+	return opts.completedRetention
+}
+
+func purgeExpiredProjectionOps(ctx context.Context, repo projectionrepo.OutboxRepository, target string, now time.Time, retention time.Duration) (int64, error) {
+	if repo == nil {
+		return 0, fmt.Errorf("outbox repository is required")
+	}
+	deletedCount, err := repo.PurgeCompleted(ctx, projectionrepo.PurgeCompletedParams{
+		Target:          target,
+		Limit:           defaultProjectionPurgeBatchSize,
+		CompletedBefore: now.UTC().Add(-retention),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("purge expired projection outbox entries: %w", err)
+	}
+	return deletedCount, nil
 }
 
 func collectProjectionOutboxMetrics(ctx context.Context, repo projectionrepo.OutboxRepository, target string) error {

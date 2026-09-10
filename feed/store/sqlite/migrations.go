@@ -54,6 +54,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_projection_outbox_scan
 			ON projection_outbox(target, status, next_retry_at, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_projection_outbox_completed
+			ON projection_outbox(target, status, completed_at, id);`,
 	}
 
 	tx, err := db.BeginTx(ctx, nil)

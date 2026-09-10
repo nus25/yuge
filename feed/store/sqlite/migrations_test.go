@@ -46,7 +46,7 @@ func TestOpenAndMigrateCreatesInitialSchema(t *testing.T) {
 			t.Fatalf("expected table %q to exist", tableName)
 		}
 	}
-	for _, indexName := range []string{"idx_feed_posts_feed_time", "idx_feed_posts_feed_did", "idx_projection_outbox_scan"} {
+	for _, indexName := range []string{"idx_feed_posts_feed_time", "idx_feed_posts_feed_did", "idx_projection_outbox_scan", "idx_projection_outbox_completed"} {
 		if !indexExists(t, db, indexName) {
 			t.Fatalf("expected index %q to exist", indexName)
 		}

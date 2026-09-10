@@ -742,6 +742,77 @@ func TestOutboxRepositoryPurgeCompletedDeletesLimitedRows(t *testing.T) {
 
 }
 
+func TestOutboxRepositoryPurgeCompletedDeletesOnlyExpiredRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-purge-expired.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewOutboxRepository(db)
+	for index := 0; index < 2; index++ {
+		if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+			FeedID:      "feed-completed",
+			FeedURI:     "at://did:plc:test/app.bsky.feed.generator/completed",
+			Target:      "gyoka",
+			Operation:   "add",
+			MutationID:  "m-expired-" + strconv.Itoa(index),
+			SubjectKey:  "feed-completed:post-" + strconv.Itoa(index),
+			OpKey:       "m-expired:add:post-" + strconv.Itoa(index),
+			PayloadJSON: `{"uri":"at://did:plc:user3/app.bsky.feed.post/post3"}`,
+			Status:      "pending",
+		}); err != nil {
+			t.Fatalf("Enqueue() error = %v", err)
+		}
+		claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+		if err != nil {
+			t.Fatalf("ClaimNextPending() error = %v", err)
+		}
+		if !ok {
+			t.Fatal("ClaimNextPending() ok = false, want true")
+		}
+		if err := repo.MarkCompleted(ctx, projectionrepo.MarkCompletedParams{ID: claimed.ID}); err != nil {
+			t.Fatalf("MarkCompleted() error = %v", err)
+		}
+	}
+
+	expiredAt := time.Now().UTC().Add(-8 * 24 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `UPDATE projection_outbox SET completed_at = ? WHERE id = 1;`, expiredAt); err != nil {
+		t.Fatalf("set completed_at: %v", err)
+	}
+
+	deletedCount, err := repo.PurgeCompleted(ctx, projectionrepo.PurgeCompletedParams{
+		Target:          "gyoka",
+		Limit:           10,
+		CompletedBefore: time.Now().UTC().Add(-7 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("PurgeCompleted() error = %v", err)
+	}
+	if deletedCount != 1 {
+		t.Fatalf("deletedCount = %d, want 1", deletedCount)
+	}
+	completedEntries, err := repo.ListByStatus(ctx, projectionrepo.ListByStatusParams{Target: "gyoka", Status: "completed", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByStatus() error = %v", err)
+	}
+	if len(completedEntries) != 1 {
+		t.Fatalf("completed entries len = %d, want 1", len(completedEntries))
+	}
+}
+
 func TestOutboxRepositoryClaimNextPendingBatchClaimsContiguousAddsOnly(t *testing.T) {
 	t.Parallel()
 
