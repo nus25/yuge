@@ -2,12 +2,14 @@ package watchlist
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 )
 
 // Watchlist は監視対象のDIDとその有効期限を管理する
 type Watchlist struct {
 	logger         *slog.Logger
+	mu             sync.Mutex // items への並行アクセスを保護する
 	items          map[string]WatchItem
 	expireDuration time.Duration
 	stopChan       chan struct{}
@@ -35,6 +37,9 @@ func NewWatchlist(expireDuration time.Duration) (*Watchlist, error) {
 
 // Add は監視対象のDIDを追加・更新する
 func (w *Watchlist) Add(did string, rkey string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	expireAt := time.Now().Add(w.expireDuration)
 	w.items[did] = WatchItem{
 		ExpireAt: expireAt,
@@ -45,6 +50,9 @@ func (w *Watchlist) Add(did string, rkey string) {
 
 // Delete は指定されたDIDを監視対象から削除する
 func (w *Watchlist) Delete(did string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if _, exists := w.items[did]; !exists {
 		w.logger.Info("attempted to remove non-existent did from watchlist", "did", did)
 		return false
@@ -56,6 +64,9 @@ func (w *Watchlist) Delete(did string) bool {
 }
 
 func (w *Watchlist) Clear() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	w.items = make(map[string]WatchItem)
 	w.logger.Info("cleared watchlist")
 }
@@ -63,6 +74,9 @@ func (w *Watchlist) Clear() {
 // Contains は指定されたDIDが監視対象に含まれているかを確認する
 // 有効期限内のitemが存在する場合はそのアイテムを返し、ない場合はnilを返す
 func (w *Watchlist) Contains(did string) *WatchItem {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	item, ok := w.items[did]
 	if !ok {
 		return nil
@@ -82,9 +96,12 @@ func (w *Watchlist) Save() error {
 }
 
 func (w *Watchlist) UpdatExpireDuration(d time.Duration) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	w.logger.Info("updating expire duration")
 	//期限切れのwatchitemは事前に削除
-	w.Reflesh()
+	w.reflesh()
 	// 既存のアイテムの有効期限を更新
 	diff := d - w.expireDuration
 	for did, item := range w.items {
@@ -99,6 +116,14 @@ func (w *Watchlist) UpdatExpireDuration(d time.Duration) error {
 }
 
 func (w *Watchlist) Reflesh() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.reflesh()
+}
+
+// reflesh は期限切れのアイテムを削除する。呼び出し側でw.muをロックしておくこと
+func (w *Watchlist) reflesh() error {
 	w.logger.Info("refreshing watchlist")
 	now := time.Now()
 	for did, item := range w.items {
@@ -129,9 +154,16 @@ func (w *Watchlist) startPeriodicRefresh() {
 	}
 }
 
-// List はwatchlistの全アイテムを返す
+// List はwatchlistの全アイテムのコピーを返す
 func (w *Watchlist) List() map[string]WatchItem {
-	return w.items
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	list := make(map[string]WatchItem, len(w.items))
+	for did, item := range w.items {
+		list[did] = item
+	}
+	return list
 }
 
 func (w *Watchlist) Stop() {
