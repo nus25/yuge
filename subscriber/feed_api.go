@@ -687,12 +687,11 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 		return
 	}
 	var t time.Time
-	fmt.Println("ind:" + req.IndexedAt)
 	if req.IndexedAt != "" {
 		var err error
 		t, err = time.Parse(time.RFC3339Nano, req.IndexedAt)
 		if err != nil {
-			c.JSON(400, gin.H{"error": "invalid indexedAt format"})
+			c.JSON(400, gin.H{"error": "invalid indexedAt format", "details": err.Error()})
 			return
 		}
 	} else {
