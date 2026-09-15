@@ -174,10 +174,10 @@ func collectProjectionOutboxMetrics(ctx context.Context, repo projectionrepo.Out
 		return fmt.Errorf("count outbox entries by status: %w", err)
 	}
 	for _, status := range projectionOutboxStatuses {
-		projectionOutboxEntries.WithLabelValues(target, status).Set(0)
+		projectionOutboxEntries.WithLabelValues(target, status.name, status.order).Set(0)
 	}
 	for _, count := range counts {
-		projectionOutboxEntries.WithLabelValues(target, count.Status).Set(float64(count.Count))
+		projectionOutboxEntries.WithLabelValues(target, count.Status, projectionOutboxStatusOrder(count.Status)).Set(float64(count.Count))
 	}
 	return nil
 }

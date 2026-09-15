@@ -113,30 +113,58 @@ func TestCollectProjectionOutboxMetrics_UpdatesGaugeByStatus(t *testing.T) {
 		t.Fatalf("MarkDead() error = %v", err)
 	}
 
-	projectionOutboxEntries.WithLabelValues(target, "pending").Set(99)
-	projectionOutboxEntries.WithLabelValues(target, "processing").Set(99)
-	projectionOutboxEntries.WithLabelValues(target, "completed").Set(99)
-	projectionOutboxEntries.WithLabelValues(target, "dead").Set(99)
-	projectionOutboxEntries.WithLabelValues(target, "failed").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "pending", "01").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "processing", "02").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "completed", "03").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "dead", "04").Set(99)
+	projectionOutboxEntries.WithLabelValues(target, "failed", "05").Set(99)
 
 	if err := collectProjectionOutboxMetrics(ctx, repo, target); err != nil {
 		t.Fatalf("collectProjectionOutboxMetrics() error = %v", err)
 	}
 
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "pending")); got != 2 {
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "pending", "01")); got != 2 {
 		t.Fatalf("pending gauge = %v, want 2", got)
 	}
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "processing")); got != 0 {
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "processing", "02")); got != 0 {
 		t.Fatalf("processing gauge = %v, want 0", got)
 	}
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "completed")); got != 1 {
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "completed", "03")); got != 1 {
 		t.Fatalf("completed gauge = %v, want 1", got)
 	}
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "dead")); got != 1 {
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "dead", "04")); got != 1 {
 		t.Fatalf("dead gauge = %v, want 1", got)
 	}
-	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "failed")); got != 1 {
+	if got := gaugeValue(t, projectionOutboxEntries.WithLabelValues(target, "failed", "05")); got != 1 {
 		t.Fatalf("failed gauge = %v, want 1", got)
+	}
+}
+
+func TestProjectionOutboxEntries_ExposesStatusOrderLabel(t *testing.T) {
+	testCases := []struct {
+		status string
+		order  string
+	}{
+		{status: "pending", order: "01"},
+		{status: "processing", order: "02"},
+		{status: "completed", order: "03"},
+		{status: "dead", order: "04"},
+		{status: "failed", order: "05"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.status, func(t *testing.T) {
+			metric := &dto.Metric{}
+			if err := projectionOutboxEntries.WithLabelValues("status-order-test", testCase.status, testCase.order).Write(metric); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "status_order" && label.GetValue() == testCase.order {
+					return
+				}
+			}
+			t.Errorf("status_order label = %q, want %q", metric.GetLabel(), testCase.order)
+		})
 	}
 }
 

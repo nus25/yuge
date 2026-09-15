@@ -393,7 +393,7 @@ func projectionResponseFromEntry(entry projectionrepo.Entry) projectionOpRespons
 func projectionSummaryCounts(counts []projectionrepo.StatusCount) map[string]int64 {
 	summary := make(map[string]int64, len(projectionOutboxStatuses))
 	for _, status := range projectionOutboxStatuses {
-		summary[status] = 0
+		summary[status.name] = 0
 	}
 	for _, count := range counts {
 		summary[count.Status] = count.Count
