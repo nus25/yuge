@@ -7,9 +7,24 @@ subscriber-run-go-cmd := "CGO_ENABLED=1 go"
 cli-build-go-cmd := "CGO_ENABLED=0 GOOS=linux go"
 yuge-subscriber-version := `cat cmd/yuge_subscriber/version.txt`
 
-test:
-    @echo "Running tests..."
-    {{ subscriber-test-go-cmd }} test github.com/nus25/yuge/...
+[arg("silent", long="silent", short="s", value="true")]
+all-test silent="false":
+    #!/usr/bin/env bash
+    if [[ "{{ silent }}" == "true" ]]; then
+        output_file="$(mktemp)"
+        trap 'rm -f "$output_file"' EXIT
+        {{ subscriber-test-go-cmd }} test github.com/nus25/yuge/... >"$output_file" 2>&1
+        test_status=$?
+        if [[ "$test_status" == "0" ]]; then
+            echo "All tests passed"
+        else
+            cat "$output_file"
+            exit "$test_status"
+        fi
+    else
+        echo "Running tests..."
+        {{ subscriber-test-go-cmd }} test github.com/nus25/yuge/...
+    fi
 
 sbsc-build:
     @echo "Building yuge subscriber Go binary..."
