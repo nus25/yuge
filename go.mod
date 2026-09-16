@@ -12,7 +12,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.18.4
 	github.com/mattn/go-sqlite3 v1.14.44
-	github.com/nus25/gyoka-client/go-atproto v0.1.0
+	github.com/nus25/gyoka-client/go-atproto v0.2.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/urfave/cli/v2 v2.27.7
 	go.uber.org/atomic v1.11.0
@@ -22,6 +22,7 @@ require (
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/earthboundkid/versioninfo/v2 v2.24.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect

@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"github.com/bluesky-social/indigo/atproto/auth"
+	"github.com/bluesky-social/indigo/atproto/identity"
+	"github.com/bluesky-social/indigo/atproto/syntax"
 	client "github.com/nus25/gyoka-client/go-atproto"
 	gyokaschema "github.com/nus25/gyoka-client/go-atproto/schema/gyoka"
 )
@@ -78,6 +84,61 @@ func TestGyokaEditor_AddMapsATProtoLexiconInput(t *testing.T) {
 	}
 	if api.addInput.Post.IndexedAt == nil || *api.addInput.Post.IndexedAt != indexedAt.Format(time.RFC3339Nano) {
 		t.Errorf("indexedAt = %v, want %s", api.addInput.Post.IndexedAt, indexedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(t *testing.T) {
+	const (
+		issuerDID = "did:plc:ewvi7nxzyoun6zhxrhsample"
+		audience  = "did:web:gyoka.example.com#gyoka_editor"
+	)
+
+	privateKey, err := atcrypto.GeneratePrivateKeyP256()
+	if err != nil {
+		t.Fatalf("generate private key: %v", err)
+	}
+	publicKey, err := privateKey.PublicKey()
+	if err != nil {
+		t.Fatalf("get public key: %v", err)
+	}
+	directory := identity.NewMockDirectory()
+	directory.Insert(identity.Identity{
+		DID: syntax.DID(issuerDID),
+		Keys: map[string]identity.VerificationMethod{
+			"atproto": {Type: "Multikey", PublicKeyMultibase: publicKey.Multibase()},
+		},
+	})
+	validator := auth.ServiceAuthValidator{Audience: audience, Dir: directory}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/xrpc/net.nusno.gyoka.ping" {
+			t.Errorf("request path = %q, want ping endpoint", request.URL.Path)
+		}
+		if proxy := request.Header.Get("Atproto-Proxy"); proxy != "" {
+			t.Errorf("Atproto-Proxy = %q, want empty", proxy)
+		}
+		endpoint := syntax.NSID("net.nusno.gyoka.ping")
+		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if _, err := validator.Validate(request.Context(), token, &endpoint); err != nil {
+			t.Errorf("validate service auth JWT: %v", err)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"message":"ok"}`))
+	}))
+	defer server.Close()
+
+	editor, err := NewGyokaEditor(context.Background(), ClientConfig{
+		Host:         server.URL,
+		Audience:     audience,
+		UserIdentity: issuerDID,
+		AppPassword:  "app-password-that-must-not-be-used",
+		PrivateKey:   privateKey,
+	}, nil, WithMinRequestInterval(0))
+	if err != nil {
+		t.Fatalf("NewGyokaEditor() error = %v", err)
+	}
+	if err := editor.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
 	}
 }
 
