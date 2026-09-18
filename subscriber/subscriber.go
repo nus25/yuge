@@ -57,12 +57,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse jetstream-url: %w", err)
 	}
 
-	gyokaConfig, gyokaProjectionEnabled, err := loadGyokaProjectionConfigForStartup(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"))
+	gyokaConfig, gyokaProjectionEnabled, err := loadGyokaProjectionConfigForStartup(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"), os.Getenv("GYOKA_PRIVATE_KEY"))
 	if err != nil {
 		logger.Warn("Gyoka projection disabled because its configuration could not be loaded", "error", err)
 	}
 	if gyokaProjectionEnabled {
-		logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity)
+		logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity, "authentication", gyokaConfig.authMode.String())
 	}
 
 	// setup feed service
@@ -114,8 +114,10 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 	}()
 	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, gyoka.ClientConfig{
 		Host:         gyokaConfig.host,
+		Audience:     gyokaConfig.audience,
 		UserIdentity: gyokaConfig.userIdentity,
 		AppPassword:  gyokaConfig.appPassword,
+		PrivateKey:   gyokaConfig.privateKey,
 	}, gyokaProjectionRuntimeOptions{
 		completedRetention: cctx.Duration("projection-completed-retention"),
 		clientOptions:      projectionClientOptions,

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"github.com/bluesky-social/indigo/atproto/syntax"
 	client "github.com/nus25/gyoka-client/go-atproto"
 	gyokaschema "github.com/nus25/gyoka-client/go-atproto/schema/gyoka"
 	"github.com/nus25/yuge/types"
@@ -37,8 +39,10 @@ func calculateBackoffDelay(attempt int, baseDelay time.Duration) time.Duration {
 
 type ClientConfig struct {
 	Host         string
+	Audience     string
 	UserIdentity string
 	AppPassword  string
+	PrivateKey   atcrypto.PrivateKey
 }
 
 type gyokaAPI interface {
@@ -133,12 +137,28 @@ func NewGyokaEditor(ctx context.Context, config ClientConfig, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
-	atprotoClient, err := client.New(ctx, config.Host, config.UserIdentity, config.AppPassword)
+	atprotoClient, err := newATProtoClient(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("create AT Protocol Gyoka client: %w", err)
 	}
 	logger.Info("authenticated AT Protocol Gyoka client", "host", config.Host, "userIdentity", config.UserIdentity)
 	return newGyokaEditor(&atprotoGyokaAPI{client: atprotoClient}, logger, opts...), nil
+}
+
+func newATProtoClient(ctx context.Context, config ClientConfig) (*client.Client, error) {
+	if config.PrivateKey == nil {
+		return client.New(ctx, config.Host, config.UserIdentity, config.AppPassword)
+	}
+	issuerDID, err := syntax.ParseDID(config.UserIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("parse inter-service issuer DID: %w", err)
+	}
+	return client.NewWithInterServiceAuth(client.InterServiceAuthConfig{
+		Host:       config.Host,
+		Audience:   config.Audience,
+		Issuer:     issuerDID,
+		PrivateKey: config.PrivateKey,
+	})
 }
 
 func newGyokaEditor(api gyokaAPI, logger *slog.Logger, opts ...ClientOptionFunc) *GyokaEditor {

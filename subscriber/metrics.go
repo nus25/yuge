@@ -70,10 +70,30 @@ var (
 	projectionOutboxEntries = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "projection_outbox_entries",
 		Help: "The current number of projection outbox entries by target and status",
-	}, []string{"target", "status"})
+	}, []string{"target", "status", "status_order"})
 )
 
-var projectionOutboxStatuses = []string{"pending", "processing", "completed", "dead", "failed"}
+type projectionOutboxStatus struct {
+	name  string
+	order string
+}
+
+var projectionOutboxStatuses = []projectionOutboxStatus{
+	{name: "pending", order: "01"},
+	{name: "processing", order: "02"},
+	{name: "completed", order: "03"},
+	{name: "dead", order: "04"},
+	{name: "failed", order: "05"},
+}
+
+func projectionOutboxStatusOrder(name string) string {
+	for _, status := range projectionOutboxStatuses {
+		if status.name == name {
+			return status.order
+		}
+	}
+	return "99"
+}
 
 func updateMetrics(f feed.Feed) {
 	ms := f.Metrics()
