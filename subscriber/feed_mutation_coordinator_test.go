@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nus25/yuge/feed/logicblock"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	projectionrepo "github.com/nus25/yuge/subscriber/projection/repository"
 	"github.com/nus25/yuge/types"
@@ -354,6 +355,57 @@ func TestFeedMutationCoordinator_DeletePost_CommitsAndBuildsContracts(t *testing
 	}
 	if transactor.outboxRepo.lastEnqueue.Target != "gyoka" {
 		t.Fatalf("Target = %s, want gyoka", transactor.outboxRepo.lastEnqueue.Target)
+	}
+}
+
+func TestFeedMutationCoordinator_ApplyPostMutations_CommitsMixedMutations(t *testing.T) {
+	t.Parallel()
+
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo:   &fakeFeedRepository{},
+		outboxRepo: &fakeOutboxRepository{},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+	feedURI := types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample")
+
+	err := coordinator.ApplyPostMutations(context.Background(), ApplyPostMutationsParams{
+		FeedID:     "feed-1",
+		FeedURI:    feedURI,
+		MutationID: "mutation-3",
+		Mutations: []logicblock.PostMutation{
+			{
+				Operation: logicblock.PostMutationAdd,
+				Post: types.Post{
+					Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/replacement"),
+					Cid:       "cid-replacement",
+					IndexedAt: "2026-05-11T04:00:00Z",
+				},
+			},
+			{
+				Operation: logicblock.PostMutationDelete,
+				Post: types.Post{
+					Uri: types.PostUri("at://did:plc:user2/app.bsky.feed.post/original"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyPostMutations() error = %v", err)
+	}
+	if !transactor.committed || transactor.rolledBack {
+		t.Fatalf("transaction state committed=%v rolledBack=%v, want committed only", transactor.committed, transactor.rolledBack)
+	}
+	if transactor.feedRepo.putCalls != 1 || transactor.feedRepo.deleteCalls != 1 {
+		t.Fatalf("repository calls put=%d delete=%d, want one each", transactor.feedRepo.putCalls, transactor.feedRepo.deleteCalls)
+	}
+	if transactor.feedRepo.lastPut.Post.Feed != feedURI {
+		t.Fatalf("added post feed = %s, want %s", transactor.feedRepo.lastPut.Post.Feed, feedURI)
+	}
+	if transactor.outboxRepo.enqueueCalls != 2 {
+		t.Fatalf("outbox enqueue calls = %d, want 2", transactor.outboxRepo.enqueueCalls)
+	}
+	if transactor.outboxRepo.enqueues[0].Operation != "add" || transactor.outboxRepo.enqueues[1].Operation != "delete" {
+		t.Fatalf("outbox operations = %q, %q, want add, delete", transactor.outboxRepo.enqueues[0].Operation, transactor.outboxRepo.enqueues[1].Operation)
 	}
 }
 

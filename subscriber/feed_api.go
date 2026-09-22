@@ -841,16 +841,28 @@ func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, tar
 
 func (h *FeedApiHandler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, post types.Post) error {
 	run := func() error {
+		mutations, err := targetFeed.PlanDelete(did, rkey)
+		if err != nil {
+			return fmt.Errorf("plan accepted delete: %w", err)
+		}
+		trimAt := 0
+		trimRemain := 0
+		if cfg := targetFeed.Config(); cfg != nil && cfg.Store() != nil {
+			trimAt = cfg.Store().GetTrimAt()
+			trimRemain = cfg.Store().GetTrimRemain()
+		}
 		if h.MutationCoordinator != nil {
-			if err := h.MutationCoordinator.DeletePost(ctx, DeletePostParams{
-				FeedID:  feedID,
-				FeedURI: types.FeedUri(targetFeed.FeedUri()),
-				Post:    post,
+			if err := h.MutationCoordinator.ApplyPostMutations(ctx, ApplyPostMutationsParams{
+				FeedID:     feedID,
+				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
+				Mutations:  mutations,
+				TrimAt:     trimAt,
+				TrimRemain: trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted delete: %w", err)
 			}
 		}
-		if err := targetFeed.DeletePost(did, rkey); err != nil {
+		if err := targetFeed.ApplyPostMutations(mutations); err != nil {
 			return fmt.Errorf("update feed cache after delete: %w", err)
 		}
 		return nil

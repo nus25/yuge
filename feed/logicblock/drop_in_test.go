@@ -233,6 +233,35 @@ func TestDropInLogicblock_Test(t *testing.T) {
 	})
 }
 
+func TestDropInLogicblock_HandlePostDelete_RemovesTriggerAfterApply(t *testing.T) {
+	block, err := NewDropInLogicBlock(&config.DropInLogicBlockConfig{
+		BaseLogicBlockConfig: config.BaseLogicBlockConfig{
+			BlockType: BlockTypeDropIn,
+			Options: map[string]interface{}{
+				config.DropInOptionTargetWord:     []string{"hello"},
+				config.DropInOptionExpireDuration: time.Hour,
+			},
+		},
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("NewDropInLogicBlock() error = %v", err)
+	}
+	dropIn := block.(*DropInLogicblock)
+	dropIn.watchlist.Add("did:plc:user1", "trigger")
+
+	if _, err := dropIn.HandlePreDelete(nil, "did:plc:user1", "trigger"); err != nil {
+		t.Fatalf("HandlePreDelete() error = %v", err)
+	}
+	if dropIn.watchlist.Contains("did:plc:user1") == nil {
+		t.Fatal("watchlist entry was removed before delete was applied")
+	}
+
+	dropIn.HandlePostDelete("did:plc:user1", "trigger")
+	if dropIn.watchlist.Contains("did:plc:user1") != nil {
+		t.Fatal("watchlist entry remains after applied delete")
+	}
+}
+
 func TestDropInLogicblock_Shutdown(t *testing.T) {
 	logger := slog.Default()
 

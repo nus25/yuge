@@ -20,6 +20,7 @@ import (
 type PostMutationCoordinator interface {
 	AddPost(ctx context.Context, params AddPostParams) error
 	DeletePost(ctx context.Context, params DeletePostParams) error
+	ApplyPostMutations(ctx context.Context, params ApplyPostMutationsParams) error
 	ClearFeed(ctx context.Context, params ClearFeedParams) error
 	TrimFeed(ctx context.Context, params TrimFeedParams) error
 }
@@ -144,15 +145,15 @@ func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error 
 			if fi.Status.LastStatus == FeedStatusError || fi.Feed == nil {
 				continue
 			}
-			if post, exists := fi.Feed.GetPost(evt.Did, evt.Commit.RKey); exists {
-				go func(feedID string, feed feed.Feed, evt *models.Event, post types.Post) {
+			if _, exists := fi.Feed.GetPost(evt.Did, evt.Commit.RKey); exists {
+				go func(feedID string, feed feed.Feed, evt *models.Event) {
 					postsDeleted.WithLabelValues(feedID).Inc()
 					h.logger.Info("deleting post", "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
-					if err := h.deleteAcceptedPost(ctx, feedID, feed, evt, post); err != nil {
+					if err := h.deleteAcceptedPost(ctx, feedID, feed, evt); err != nil {
 						h.logger.Error("failed to delete post", "error", err, "feed", feedID, "did", evt.Did, "rkey", evt.Commit.RKey)
 						return
 					}
-				}(id, fi.Feed, evt, post)
+				}(id, fi.Feed, evt)
 			}
 		}
 	}
@@ -211,18 +212,30 @@ func (h *Handler) addAcceptedPost(ctx context.Context, feedID string, targetFeed
 	return run()
 }
 
-func (h *Handler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, evt *models.Event, post types.Post) error {
+func (h *Handler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, evt *models.Event) error {
 	run := func() error {
+		mutations, err := targetFeed.PlanDelete(evt.Did, evt.Commit.RKey)
+		if err != nil {
+			return fmt.Errorf("plan accepted delete: %w", err)
+		}
+		trimAt := 0
+		trimRemain := 0
+		if cfg := targetFeed.Config(); cfg != nil && cfg.Store() != nil {
+			trimAt = cfg.Store().GetTrimAt()
+			trimRemain = cfg.Store().GetTrimRemain()
+		}
 		if h.MutationCoordinator != nil {
-			if err := h.MutationCoordinator.DeletePost(ctx, DeletePostParams{
-				FeedID:  feedID,
-				FeedURI: types.FeedUri(targetFeed.FeedUri()),
-				Post:    post,
+			if err := h.MutationCoordinator.ApplyPostMutations(ctx, ApplyPostMutationsParams{
+				FeedID:     feedID,
+				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
+				Mutations:  mutations,
+				TrimAt:     trimAt,
+				TrimRemain: trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted delete: %w", err)
 			}
 		}
-		if err := targetFeed.DeletePost(evt.Did, evt.Commit.RKey); err != nil {
+		if err := targetFeed.ApplyPostMutations(mutations); err != nil {
 			return fmt.Errorf("update feed cache after delete: %w", err)
 		}
 		return nil

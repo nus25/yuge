@@ -160,16 +160,19 @@ func (d *DropInLogicblock) Test(did string, rkey string, post *apibsky.FeedPost)
 	return false
 }
 
-func (d *DropInLogicblock) HandlePreDelete(did string, rkey string) error {
+func (d *DropInLogicblock) HandlePreDelete(_ PostStore, did string, rkey string) ([]PostMutation, error) {
+	return nil, nil
+}
+
+func (d *DropInLogicblock) HandlePostDelete(did string, rkey string) {
 	item := d.watchlist.Contains(did)
 	if item == nil {
-		return nil
+		return
 	}
 	// if trigger post is deleted, delete from watchlist
 	if item.RKey == rkey {
 		d.watchlist.Delete(did)
 	}
-	return nil
 }
 
 func (d *DropInLogicblock) GetMetrics() []metrics.Metric {
