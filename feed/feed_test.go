@@ -15,6 +15,25 @@ import (
 	feedtypes "github.com/nus25/yuge/types"
 )
 
+type memoryLogicBlockStateRepository struct {
+	states map[string][]byte
+}
+
+func (r *memoryLogicBlockStateRepository) LoadLogicBlockState(_ context.Context, feedID string, blockKey string) ([]byte, bool, error) {
+	state, found := r.states[feedID+":"+blockKey]
+	return state, found, nil
+}
+
+func (r *memoryLogicBlockStateRepository) SaveLogicBlockState(_ context.Context, feedID string, blockKey string, _ int, state []byte) error {
+	r.states[feedID+":"+blockKey] = append([]byte(nil), state...)
+	return nil
+}
+
+func (r *memoryLogicBlockStateRepository) DeleteLogicBlockState(_ context.Context, feedID string, blockKey string) error {
+	delete(r.states, feedID+":"+blockKey)
+	return nil
+}
+
 type plannedDeleteLogicBlock struct {
 	mutations []logicblock.PostMutation
 	observed  []feedtypes.Post
@@ -152,6 +171,57 @@ func TestFeedIntegration(t *testing.T) {
 	err = feed.Shutdown(ctx)
 	if err != nil {
 		t.Errorf("Failed to shutdown feed: %v", err)
+	}
+}
+
+func TestFeedRestoresDropInState(t *testing.T) {
+	ctx := context.Background()
+	const (
+		feedID  = "stateful-feed"
+		feedURI = "at://did:plc:test/app.bsky.feed.generator/stateful"
+	)
+	stateRepository := &memoryLogicBlockStateRepository{states: make(map[string][]byte)}
+	configJSON := `{
+		"logic": {
+			"blocks": [{
+				"name": "active-authors",
+				"type": "dropin",
+				"options": {
+					"targetWord": ["hello"],
+					"expireDuration": "1h"
+				}
+			}]
+		}
+	}`
+	feedConfig, err := feed.NewFeedConfigFromJSON(configJSON)
+	if err != nil {
+		t.Fatalf("NewFeedConfigFromJSON() error = %v", err)
+	}
+
+	first, err := NewFeedWithOptions(ctx, feedID, feedURI, FeedOptions{
+		Config:               feedConfig,
+		LogicBlockStateStore: stateRepository,
+	})
+	if err != nil {
+		t.Fatalf("first NewFeedWithOptions() error = %v", err)
+	}
+	if !first.Test("did:plc:author", "trigger", &apibsky.FeedPost{Text: "hello"}) {
+		t.Fatal("trigger post did not pass drop-in block")
+	}
+	if err := first.Shutdown(ctx); err != nil {
+		t.Fatalf("first Shutdown() error = %v", err)
+	}
+
+	restarted, err := NewFeedWithOptions(ctx, feedID, feedURI, FeedOptions{
+		Config:               feedConfig,
+		LogicBlockStateStore: stateRepository,
+	})
+	if err != nil {
+		t.Fatalf("restarted NewFeedWithOptions() error = %v", err)
+	}
+	defer restarted.Shutdown(ctx)
+	if !restarted.Test("did:plc:author", "ordinary", &apibsky.FeedPost{Text: "ordinary post"}) {
+		t.Fatal("watchlist state was not restored after feed recreation")
 	}
 }
 

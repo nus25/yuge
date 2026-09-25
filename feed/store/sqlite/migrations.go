@@ -33,6 +33,14 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			last_loaded_at TEXT,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS logic_block_state (
+			feed_id TEXT NOT NULL,
+			block_key TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			state_json TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (feed_id, block_key)
+		);`,
 		`CREATE TABLE IF NOT EXISTS projection_outbox (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			feed_id TEXT NOT NULL,

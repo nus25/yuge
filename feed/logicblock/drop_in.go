@@ -2,6 +2,7 @@ package logicblock
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,6 +20,7 @@ import (
 var _ LogicBlock = (*DropInLogicblock)(nil)
 var _ CommandProcessor = (*DropInLogicblock)(nil)
 var _ MetricProvider = (*DropInLogicblock)(nil)
+var _ StatefulLogicBlock = (*DropInLogicblock)(nil)
 
 const (
 	BlockTypeDropIn                      = config.DropInBlockType
@@ -40,6 +42,9 @@ type DropInLogicblock struct {
 	cancelWord     []string
 	ignoreWord     []string
 	watchlist      *watchlist.Watchlist
+	stateFeedID    string
+	stateBlockKey  string
+	stateStore     StateRepository
 }
 
 func NewDropInLogicBlock(cfg types.LogicBlockConfig, logger *slog.Logger) (LogicBlock, error) {
@@ -119,6 +124,7 @@ func NewDropInLogicBlock(cfg types.LogicBlockConfig, logger *slog.Logger) (Logic
 func (d *DropInLogicblock) Reset() error {
 	d.logger.Info("resetting drop-in block")
 	d.watchlist.Clear()
+	d.saveState()
 	return nil
 }
 
@@ -133,6 +139,7 @@ func (d *DropInLogicblock) Test(did string, rkey string, post *apibsky.FeedPost)
 	for _, w := range d.cancelWord {
 		if strings.Contains(txt, w) {
 			d.watchlist.Delete(did)
+			d.saveState()
 			return false
 		}
 	}
@@ -153,6 +160,7 @@ func (d *DropInLogicblock) Test(did string, rkey string, post *apibsky.FeedPost)
 	for _, w := range d.targetWord {
 		if strings.Contains(txt, w) {
 			d.watchlist.Add(did, rkey)
+			d.saveState()
 			return true
 		}
 	}
@@ -172,6 +180,41 @@ func (d *DropInLogicblock) HandlePostDelete(did string, rkey string) {
 	// if trigger post is deleted, delete from watchlist
 	if item.RKey == rkey {
 		d.watchlist.Delete(did)
+		d.saveState()
+	}
+}
+
+func (d *DropInLogicblock) RestoreState(ctx context.Context, feedID string, blockKey string, repository StateRepository) error {
+	d.stateFeedID = feedID
+	d.stateBlockKey = blockKey
+	d.stateStore = repository
+
+	state, found, err := repository.LoadLogicBlockState(ctx, feedID, blockKey)
+	if err != nil {
+		return fmt.Errorf("load drop-in state: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	items := make(map[string]watchlist.WatchItem)
+	if err := json.Unmarshal(state, &items); err != nil {
+		return fmt.Errorf("unmarshal drop-in state: %w", err)
+	}
+	d.watchlist.Restore(items)
+	return nil
+}
+
+func (d *DropInLogicblock) saveState() {
+	if d.stateStore == nil {
+		return
+	}
+	state, err := json.Marshal(d.watchlist.List())
+	if err != nil {
+		d.logger.Error("failed to marshal drop-in state", "error", err)
+		return
+	}
+	if err := d.stateStore.SaveLogicBlockState(context.Background(), d.stateFeedID, d.stateBlockKey, 1, state); err != nil {
+		d.logger.Error("failed to save drop-in state", "error", err)
 	}
 }
 
@@ -196,6 +239,7 @@ func (d *DropInLogicblock) ProcessCommand(command string, args map[string]string
 			return "", fmt.Errorf("invalid command parameters: %s did: %s rkey: %s", command, did, rkey)
 		}
 		d.watchlist.Add(did, rkey)
+		d.saveState()
 		return "add success", nil
 	case DropInCommandDelete:
 		did := args["did"]
@@ -203,6 +247,7 @@ func (d *DropInLogicblock) ProcessCommand(command string, args map[string]string
 			return "", fmt.Errorf("invalid command parameters: %s did: %s", command, did)
 		}
 		d.watchlist.Delete(did)
+		d.saveState()
 		return "delete success", nil
 	case DropinCommandList:
 		list := d.watchlist.List()

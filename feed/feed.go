@@ -62,6 +62,9 @@ type FeedOptions struct {
 	// Logger is an optional logger for feed operations.
 	// If not specified, slog.Default() will be used.
 	Logger *slog.Logger
+
+	// LogicBlockStateStore persists state owned by stateful logic blocks.
+	LogicBlockStateStore logicblock.StateRepository
 }
 
 func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts FeedOptions) (Feed, error) {
@@ -120,6 +123,7 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 	// logicblock
 	var logicblocks []logicblock.LogicBlock
 
+	blockTypeCounts := make(map[string]int)
 	for _, blockCfg := range cfg.FeedLogic().GetLogicBlockConfigs() {
 		// 各ブロックの作成時にもコンテキストをチェック
 		select {
@@ -134,6 +138,17 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 			return nil, errors.NewDependencyError("Feed", "logicBlock", fmt.Sprintf("failed to create logic block: %v", err))
 		}
 		logicblocks = append(logicblocks, block)
+		if stateful, ok := block.(logicblock.StatefulLogicBlock); ok && opts.LogicBlockStateStore != nil {
+			blockTypeCounts[block.BlockType()]++
+			blockKey := block.BlockName()
+			if blockKey == "" {
+				blockKey = fmt.Sprintf("%s:%d", block.BlockType(), blockTypeCounts[block.BlockType()])
+				lg.Warn("stateful logic block has no name; use a name to keep its persisted state stable when configuration order changes", "block", block.BlockType(), "state_key", blockKey)
+			}
+			if err := stateful.RestoreState(ctx, feedId, blockKey, opts.LogicBlockStateStore); err != nil {
+				return nil, errors.NewDependencyError("Feed", "logicBlockState", fmt.Sprintf("failed to restore logic block state: %v", err))
+			}
+		}
 	}
 
 	// feed

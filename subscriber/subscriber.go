@@ -106,6 +106,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		)
 	}
 	fs.SetStoreLoader(sqlitePersistence.postLoader)
+	fs.SetLogicBlockStateStore(sqlitePersistence.logicBlockStateStore)
 	fs.SetMutationCoordinator(sqlitePersistence.mutationCoordinator)
 	defer func() {
 		if err := sqlitePersistence.Close(); err != nil {

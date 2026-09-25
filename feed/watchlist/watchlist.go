@@ -95,6 +95,21 @@ func (w *Watchlist) Save() error {
 	return nil
 }
 
+// Restore replaces all items with a snapshot and discards entries that expired
+// while the process was stopped.
+func (w *Watchlist) Restore(items map[string]WatchItem) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.items = make(map[string]WatchItem, len(items))
+	now := time.Now()
+	for did, item := range items {
+		if now.Before(item.ExpireAt) {
+			w.items[did] = item
+		}
+	}
+}
+
 func (w *Watchlist) UpdatExpireDuration(d time.Duration) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
