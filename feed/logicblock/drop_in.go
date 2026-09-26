@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
@@ -29,6 +30,7 @@ const (
 	DropInCommandAdd                     = "add"
 	DropInCommandDelete                  = "delete"
 	DropinCommandList                    = "list"
+	dropInStateFlushInterval             = 15 * time.Second
 )
 
 func init() {
@@ -45,6 +47,10 @@ type DropInLogicblock struct {
 	stateFeedID    string
 	stateBlockKey  string
 	stateStore     StateRepository
+	stateMu        sync.Mutex
+	stateDirty     bool
+	stateStop      chan struct{}
+	stateDone      chan struct{}
 }
 
 func NewDropInLogicBlock(cfg types.LogicBlockConfig, logger *slog.Logger) (LogicBlock, error) {
@@ -124,11 +130,13 @@ func NewDropInLogicBlock(cfg types.LogicBlockConfig, logger *slog.Logger) (Logic
 func (d *DropInLogicblock) Reset() error {
 	d.logger.Info("resetting drop-in block")
 	d.watchlist.Clear()
-	d.saveState()
+	d.markStateDirty()
 	return nil
 }
 
 func (d *DropInLogicblock) Shutdown(ctx context.Context) error {
+	d.stopStatePersistence()
+	d.flushState()
 	d.watchlist.Stop()
 	return nil
 }
@@ -139,7 +147,7 @@ func (d *DropInLogicblock) Test(did string, rkey string, post *apibsky.FeedPost)
 	for _, w := range d.cancelWord {
 		if strings.Contains(txt, w) {
 			d.watchlist.Delete(did)
-			d.saveState()
+			d.markStateDirty()
 			return false
 		}
 	}
@@ -160,7 +168,7 @@ func (d *DropInLogicblock) Test(did string, rkey string, post *apibsky.FeedPost)
 	for _, w := range d.targetWord {
 		if strings.Contains(txt, w) {
 			d.watchlist.Add(did, rkey)
-			d.saveState()
+			d.markStateDirty()
 			return true
 		}
 	}
@@ -180,19 +188,22 @@ func (d *DropInLogicblock) HandlePostDelete(did string, rkey string) {
 	// if trigger post is deleted, delete from watchlist
 	if item.RKey == rkey {
 		d.watchlist.Delete(did)
-		d.saveState()
+		d.markStateDirty()
 	}
 }
 
 func (d *DropInLogicblock) RestoreState(ctx context.Context, feedID string, blockKey string, repository StateRepository) error {
+	d.stateMu.Lock()
 	d.stateFeedID = feedID
 	d.stateBlockKey = blockKey
 	d.stateStore = repository
+	d.stateMu.Unlock()
 
 	state, found, err := repository.LoadLogicBlockState(ctx, feedID, blockKey)
 	if err != nil {
 		return fmt.Errorf("load drop-in state: %w", err)
 	}
+	d.startStatePersistence()
 	if !found {
 		return nil
 	}
@@ -204,17 +215,74 @@ func (d *DropInLogicblock) RestoreState(ctx context.Context, feedID string, bloc
 	return nil
 }
 
-func (d *DropInLogicblock) saveState() {
-	if d.stateStore == nil {
+func (d *DropInLogicblock) markStateDirty() {
+	d.stateMu.Lock()
+	d.stateDirty = true
+	d.stateMu.Unlock()
+}
+
+func (d *DropInLogicblock) startStatePersistence() {
+	d.stateMu.Lock()
+	if d.stateStop != nil {
+		d.stateMu.Unlock()
 		return
 	}
+	d.stateStop = make(chan struct{})
+	d.stateDone = make(chan struct{})
+	stop := d.stateStop
+	done := d.stateDone
+	d.stateMu.Unlock()
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(dropInStateFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				d.flushState()
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (d *DropInLogicblock) stopStatePersistence() {
+	d.stateMu.Lock()
+	stop := d.stateStop
+	done := d.stateDone
+	d.stateStop = nil
+	d.stateDone = nil
+	d.stateMu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+}
+
+func (d *DropInLogicblock) flushState() {
+	d.stateMu.Lock()
+	if d.stateStore == nil || !d.stateDirty {
+		d.stateMu.Unlock()
+		return
+	}
+	repository := d.stateStore
+	feedID := d.stateFeedID
+	blockKey := d.stateBlockKey
+	d.stateDirty = false
+	d.stateMu.Unlock()
+
 	state, err := json.Marshal(d.watchlist.List())
 	if err != nil {
 		d.logger.Error("failed to marshal drop-in state", "error", err)
+		d.markStateDirty()
 		return
 	}
-	if err := d.stateStore.SaveLogicBlockState(context.Background(), d.stateFeedID, d.stateBlockKey, 1, state); err != nil {
+	if err := repository.SaveLogicBlockState(context.Background(), feedID, blockKey, 1, state); err != nil {
 		d.logger.Error("failed to save drop-in state", "error", err)
+		d.markStateDirty()
 	}
 }
 
@@ -239,7 +307,7 @@ func (d *DropInLogicblock) ProcessCommand(command string, args map[string]string
 			return "", fmt.Errorf("invalid command parameters: %s did: %s rkey: %s", command, did, rkey)
 		}
 		d.watchlist.Add(did, rkey)
-		d.saveState()
+		d.markStateDirty()
 		return "add success", nil
 	case DropInCommandDelete:
 		did := args["did"]
@@ -247,7 +315,7 @@ func (d *DropInLogicblock) ProcessCommand(command string, args map[string]string
 			return "", fmt.Errorf("invalid command parameters: %s did: %s", command, did)
 		}
 		d.watchlist.Delete(did)
-		d.saveState()
+		d.markStateDirty()
 		return "delete success", nil
 	case DropinCommandList:
 		list := d.watchlist.List()

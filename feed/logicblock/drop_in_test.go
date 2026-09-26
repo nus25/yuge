@@ -2,13 +2,77 @@ package logicblock
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
 
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
 	config "github.com/nus25/yuge/feed/config/logic"
+	"github.com/nus25/yuge/feed/watchlist"
 )
+
+type recordingStateRepository struct {
+	saveCount int
+	state     []byte
+}
+
+func (r *recordingStateRepository) LoadLogicBlockState(context.Context, string, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (r *recordingStateRepository) SaveLogicBlockState(_ context.Context, _ string, _ string, _ int, state []byte) error {
+	r.saveCount++
+	r.state = append([]byte(nil), state...)
+	return nil
+}
+
+func TestDropInLogicblockDefersStatePersistenceUntilFlush(t *testing.T) {
+	block, err := NewDropInLogicBlock(&config.DropInLogicBlockConfig{
+		BaseLogicBlockConfig: config.BaseLogicBlockConfig{
+			BlockType: BlockTypeDropIn,
+			Options: map[string]interface{}{
+				config.DropInOptionTargetWord: []string{"hello"},
+			},
+		},
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("NewDropInLogicBlock() error = %v", err)
+	}
+	dropIn := block.(*DropInLogicblock)
+	repository := &recordingStateRepository{}
+	if err := dropIn.RestoreState(context.Background(), "feed-1", "dropin-1", repository); err != nil {
+		t.Fatalf("RestoreState() error = %v", err)
+	}
+	if dropIn.stateStop == nil {
+		t.Fatal("RestoreState() did not start periodic state persistence")
+	}
+	t.Cleanup(func() {
+		if err := dropIn.Shutdown(context.Background()); err != nil {
+			t.Errorf("Shutdown() error = %v", err)
+		}
+	})
+
+	if !dropIn.Test("did:plc:user", "rkey", &apibsky.FeedPost{Text: "hello"}) {
+		t.Fatal("Test() = false, want true")
+	}
+	if repository.saveCount != 0 {
+		t.Fatalf("SaveLogicBlockState() calls = %d, want 0 before flush", repository.saveCount)
+	}
+
+	dropIn.flushState()
+
+	if repository.saveCount != 1 {
+		t.Fatalf("SaveLogicBlockState() calls = %d, want 1 after flush", repository.saveCount)
+	}
+	var items map[string]watchlist.WatchItem
+	if err := json.Unmarshal(repository.state, &items); err != nil {
+		t.Fatalf("unmarshal saved state: %v", err)
+	}
+	if _, found := items["did:plc:user"]; !found {
+		t.Errorf("saved state = %v, want added user", items)
+	}
+}
 
 func TestNewDropInLogicBlock(t *testing.T) {
 	logger := slog.Default()
