@@ -139,7 +139,7 @@ type fakeHandlerFeed struct {
 
 func (f *fakeHandlerFeed) FeedId() string  { return f.feedID }
 func (f *fakeHandlerFeed) FeedUri() string { return f.feedURI }
-func (f *fakeHandlerFeed) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {
+func (f *fakeHandlerFeed) AddPost(did string, rkey string, cid string, t time.Time, langs []string, _ ...types.PostMetadata) error {
 	f.addPostCalls++
 	f.lastDid = did
 	f.lastRkey = rkey

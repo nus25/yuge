@@ -34,13 +34,17 @@ func TestFeedRepositoryCRUD(t *testing.T) {
 	}
 
 	repo := NewFeedRepository(db)
+	feedContext := "matches the requested topic"
+	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 
 	newer := types.Post{
-		Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
-		Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post2"),
-		Cid:       "cid-2",
-		IndexedAt: "2026-05-11T03:00:00Z",
-		Langs:     []string{"ja"},
+		Feed:        types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Uri:         types.PostUri("at://did:plc:user1/app.bsky.feed.post/post2"),
+		Cid:         "cid-2",
+		IndexedAt:   "2026-05-11T03:00:00Z",
+		Langs:       []string{"ja"},
+		FeedContext: &feedContext,
+		Reason:      &types.PostReason{Repost: &repostURI},
 	}
 	older := types.Post{
 		Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
@@ -65,6 +69,12 @@ func TestFeedRepositoryCRUD(t *testing.T) {
 	}
 	if posts[0].Uri != newer.Uri {
 		t.Fatalf("ListPosts()[0].Uri = %s, want %s", posts[0].Uri, newer.Uri)
+	}
+	if posts[0].FeedContext == nil || *posts[0].FeedContext != feedContext {
+		t.Fatalf("ListPosts()[0].FeedContext = %v, want %q", posts[0].FeedContext, feedContext)
+	}
+	if posts[0].Reason == nil || posts[0].Reason.Repost == nil || *posts[0].Reason.Repost != repostURI {
+		t.Fatalf("ListPosts()[0].Reason = %+v, want repost %q", posts[0].Reason, repostURI)
 	}
 
 	state := storerepo.FeedState{

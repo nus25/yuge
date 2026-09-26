@@ -21,16 +21,18 @@ type FeedMutationCoordinator struct {
 }
 
 type AddPostParams struct {
-	FeedID     string
-	FeedURI    types.FeedUri
-	Did        string
-	Rkey       string
-	Cid        string
-	IndexedAt  time.Time
-	Langs      []string
-	TrimAt     int
-	TrimRemain int
-	MutationID string
+	FeedID      string
+	FeedURI     types.FeedUri
+	Did         string
+	Rkey        string
+	Cid         string
+	IndexedAt   time.Time
+	Langs       []string
+	FeedContext *string
+	Reason      *types.PostReason
+	TrimAt      int
+	TrimRemain  int
+	MutationID  string
 }
 
 type DeletePostParams struct {
@@ -77,11 +79,13 @@ func (c *FeedMutationCoordinator) AddPost(ctx context.Context, params AddPostPar
 
 	postURI := types.PostUri(fmt.Sprintf("at://%s/app.bsky.feed.post/%s", params.Did, params.Rkey))
 	post := types.Post{
-		Feed:      params.FeedURI,
-		Uri:       postURI,
-		Cid:       params.Cid,
-		IndexedAt: params.IndexedAt.UTC().Format(time.RFC3339Nano),
-		Langs:     params.Langs,
+		Feed:        params.FeedURI,
+		Uri:         postURI,
+		Cid:         params.Cid,
+		IndexedAt:   params.IndexedAt.UTC().Format(time.RFC3339Nano),
+		Langs:       params.Langs,
+		FeedContext: params.FeedContext,
+		Reason:      params.Reason,
 	}
 	subjectKey := fmt.Sprintf("%s:%s", params.FeedID, postURI)
 	opKey := fmt.Sprintf("%s:add:%s", mutationID, subjectKey)

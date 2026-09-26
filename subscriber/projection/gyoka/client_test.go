@@ -85,6 +85,141 @@ func TestGyokaEditor_AddMapsATProtoLexiconInput(t *testing.T) {
 	if api.addInput.Post.IndexedAt == nil || *api.addInput.Post.IndexedAt != indexedAt.Format(time.RFC3339Nano) {
 		t.Errorf("indexedAt = %v, want %s", api.addInput.Post.IndexedAt, indexedAt.Format(time.RFC3339Nano))
 	}
+	if api.addInput.Post.FeedContext != nil {
+		t.Errorf("feedContext = %v, want nil", api.addInput.Post.FeedContext)
+	}
+	if api.addInput.Post.Reason != nil {
+		t.Errorf("reason = %v, want nil", api.addInput.Post.Reason)
+	}
+}
+
+func TestGyokaEditor_AddMapsOptionalPostMetadata(t *testing.T) {
+	feedContext := "recommended because it matches the topic"
+	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
+	tests := []struct {
+		name       string
+		reason     *PostReason
+		wantRepost string
+		wantPin    bool
+	}{
+		{
+			name:       "repost reason",
+			reason:     &PostReason{Repost: &repostURI},
+			wantRepost: repostURI,
+		},
+		{
+			name:    "pin reason",
+			reason:  &PostReason{Pin: true},
+			wantPin: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api := &fakeGyokaAPI{}
+			editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
+
+			if err := editor.Add(PostParams{
+				FeedUri:     "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:         "did:plc:author",
+				Rkey:        "post-1",
+				Cid:         "bafy-test",
+				IndexedAt:   time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+				FeedContext: &feedContext,
+				Reason:      test.reason,
+			}); err != nil {
+				t.Fatalf("Add() error = %v", err)
+			}
+
+			post := api.addInput.Post
+			if post.FeedContext == nil || *post.FeedContext != feedContext {
+				t.Fatalf("feedContext = %v, want %q", post.FeedContext, feedContext)
+			}
+			if test.wantRepost != "" {
+				if post.Reason == nil || post.Reason.FeedAddPost_SkeletonReasonRepost == nil || post.Reason.FeedAddPost_SkeletonReasonRepost.Repost != test.wantRepost {
+					t.Fatalf("repost reason = %+v, want %q", post.Reason, test.wantRepost)
+				}
+			}
+			if test.wantPin {
+				if post.Reason == nil || post.Reason.FeedAddPost_SkeletonReasonPin == nil {
+					t.Fatalf("pin reason = %+v, want pin", post.Reason)
+				}
+			}
+		})
+	}
+}
+
+func TestGyokaEditor_BatchAddMapsOptionalPostMetadata(t *testing.T) {
+	feedContext := "recommended because it matches the topic"
+	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
+	api := &fakeGyokaAPI{}
+	editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
+
+	if err := editor.BatchAdd(BatchPostParams{Entries: []PostParams{
+		{
+			FeedUri:     "at://did:plc:feed/app.bsky.feed.generator/sample",
+			Did:         "did:plc:author1",
+			Rkey:        "post-1",
+			Cid:         "bafy-test-1",
+			IndexedAt:   time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+			FeedContext: &feedContext,
+			Reason:      &PostReason{Repost: &repostURI},
+		},
+		{
+			FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+			Did:       "did:plc:author2",
+			Rkey:      "post-2",
+			Cid:       "bafy-test-2",
+			IndexedAt: time.Date(2026, 8, 22, 12, 31, 0, 0, time.UTC),
+			Reason:    &PostReason{Pin: true},
+		},
+	}}); err != nil {
+		t.Fatalf("BatchAdd() error = %v", err)
+	}
+
+	if api.batchAddInput == nil || len(api.batchAddInput.Entries) != 1 || len(api.batchAddInput.Entries[0].Posts) != 2 {
+		t.Fatalf("BatchAddPosts() input = %+v", api.batchAddInput)
+	}
+	posts := api.batchAddInput.Entries[0].Posts
+	if posts[0].FeedContext == nil || *posts[0].FeedContext != feedContext {
+		t.Errorf("feedContext = %v, want %q", posts[0].FeedContext, feedContext)
+	}
+	if posts[0].Reason == nil || posts[0].Reason.FeedBatchAddPosts_SkeletonReasonRepost == nil || posts[0].Reason.FeedBatchAddPosts_SkeletonReasonRepost.Repost != repostURI {
+		t.Errorf("repost reason = %+v, want %q", posts[0].Reason, repostURI)
+	}
+	if posts[1].Reason == nil || posts[1].Reason.FeedBatchAddPosts_SkeletonReasonPin == nil {
+		t.Errorf("pin reason = %+v, want pin", posts[1].Reason)
+	}
+}
+
+func TestGyokaEditor_AddRejectsInvalidPostReason(t *testing.T) {
+	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
+	for _, test := range []struct {
+		name   string
+		reason *PostReason
+	}{
+		{name: "empty", reason: &PostReason{}},
+		{name: "repost and pin", reason: &PostReason{Repost: &repostURI, Pin: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := &fakeGyokaAPI{}
+			editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
+			err := editor.Add(PostParams{
+				FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:       "did:plc:author",
+				Rkey:      "post-1",
+				Cid:       "bafy-test",
+				IndexedAt: time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+				Reason:    test.reason,
+			})
+			if !errors.Is(err, ErrInvalidPostReason) {
+				t.Fatalf("Add() error = %v, want ErrInvalidPostReason", err)
+			}
+			if api.addInput != nil {
+				t.Fatalf("AddPost() input = %+v, want nil", api.addInput)
+			}
+		})
+	}
 }
 
 func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(t *testing.T) {

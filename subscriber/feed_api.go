@@ -663,9 +663,11 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 
 	// POSTデータを受け取る
 	var req struct {
-		CID       string   `json:"cid"`
-		IndexedAt string   `json:"indexedAt"`
-		Langs     []string `json:"langs,omitempty"`
+		CID         string            `json:"cid"`
+		IndexedAt   string            `json:"indexedAt"`
+		Langs       []string          `json:"langs,omitempty"`
+		FeedContext *string           `json:"feedContext,omitempty"`
+		Reason      *types.PostReason `json:"reason,omitempty"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -676,6 +678,10 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 	// CIDの形式チェック
 	if len(req.CID) == 0 {
 		c.JSON(400, gin.H{"error": "invalid cid format: cid must not be empty"})
+		return
+	}
+	if err := req.Reason.Validate(); err != nil {
+		c.JSON(400, gin.H{"error": "invalid reason", "details": err.Error()})
 		return
 	}
 
@@ -698,14 +704,17 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 		t = time.Now()
 	}
 
-	if err := h.addAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, req.CID, t, req.Langs); err != nil {
+	if err := h.addAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, req.CID, t, req.Langs, req.FeedContext, req.Reason); err != nil {
 		c.JSON(500, gin.H{"error": "failed to add post"})
 		return
 	}
 	post := types.Post{
-		Uri:       types.PostUri("at://" + did + "/app.bsky.feed.post/" + rkey),
-		Cid:       req.CID,
-		IndexedAt: t.UTC().Format(time.RFC3339Nano),
+		Uri:         types.PostUri("at://" + did + "/app.bsky.feed.post/" + rkey),
+		Cid:         req.CID,
+		IndexedAt:   t.UTC().Format(time.RFC3339Nano),
+		Langs:       req.Langs,
+		FeedContext: req.FeedContext,
+		Reason:      req.Reason,
 	}
 	c.JSON(200, AddPostResponse{
 		Message: "post added successfully",
@@ -805,7 +814,7 @@ func (h *FeedApiHandler) DeletePost(c *gin.Context) {
 	})
 }
 
-func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, cid string, indexedAt time.Time, langs []string) error {
+func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, cid string, indexedAt time.Time, langs []string, feedContext *string, reason *types.PostReason) error {
 	run := func() error {
 		trimAt := 0
 		trimRemain := 0
@@ -815,20 +824,22 @@ func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, tar
 		}
 		if h.MutationCoordinator != nil {
 			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
-				FeedID:     feedID,
-				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
-				Did:        did,
-				Rkey:       rkey,
-				Cid:        cid,
-				IndexedAt:  indexedAt,
-				Langs:      langs,
-				TrimAt:     trimAt,
-				TrimRemain: trimRemain,
+				FeedID:      feedID,
+				FeedURI:     types.FeedUri(targetFeed.FeedUri()),
+				Did:         did,
+				Rkey:        rkey,
+				Cid:         cid,
+				IndexedAt:   indexedAt,
+				Langs:       langs,
+				FeedContext: feedContext,
+				Reason:      reason,
+				TrimAt:      trimAt,
+				TrimRemain:  trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted post: %w", err)
 			}
 		}
-		if err := targetFeed.AddPost(did, rkey, cid, indexedAt, langs); err != nil {
+		if err := targetFeed.AddPost(did, rkey, cid, indexedAt, langs, types.PostMetadata{FeedContext: feedContext, Reason: reason}); err != nil {
 			return fmt.Errorf("update feed cache: %w", err)
 		}
 		return nil

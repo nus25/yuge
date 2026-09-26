@@ -6,12 +6,36 @@ import (
 	"github.com/bluesky-social/indigo/util"
 )
 
+var ErrInvalidPostReason = errors.New("post reason must specify exactly one of repost or pin")
+
+type PostReason struct {
+	Repost *string `json:"repost,omitempty"`
+	Pin    bool    `json:"pin,omitempty"`
+}
+
+type PostMetadata struct {
+	FeedContext *string
+	Reason      *PostReason
+}
+
+func (r *PostReason) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if (r.Repost != nil) == r.Pin {
+		return ErrInvalidPostReason
+	}
+	return nil
+}
+
 type Post struct {
-	Feed      FeedUri  `json:"feed,omitempty"`
-	Uri       PostUri  `json:"uri"`
-	Cid       string   `json:"cid"`
-	IndexedAt string   `json:"indexedAt"`
-	Langs     []string `json:"langs,omitempty"`
+	Feed        FeedUri     `json:"feed,omitempty"`
+	Uri         PostUri     `json:"uri"`
+	Cid         string      `json:"cid"`
+	IndexedAt   string      `json:"indexedAt"`
+	Langs       []string    `json:"langs,omitempty"`
+	FeedContext *string     `json:"feedContext,omitempty"`
+	Reason      *PostReason `json:"reason,omitempty"`
 }
 
 type FeedUri string

@@ -6,6 +6,8 @@ import (
 	"github.com/nus25/yuge/types"
 )
 
+var ErrInvalidPostReason = types.ErrInvalidPostReason
+
 type LoadParams struct {
 	FeedId  string
 	FeedUri types.FeedUri
@@ -19,13 +21,17 @@ type SaveParams struct {
 }
 
 type PostParams struct {
-	FeedUri   types.FeedUri
-	Did       string
-	Rkey      string
-	Cid       string
-	IndexedAt time.Time
-	Langs     []string
+	FeedUri     types.FeedUri
+	Did         string
+	Rkey        string
+	Cid         string
+	IndexedAt   time.Time
+	Langs       []string
+	FeedContext *string
+	Reason      *PostReason
 }
+
+type PostReason = types.PostReason
 
 type BatchPostParams struct {
 	Entries []PostParams

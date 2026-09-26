@@ -36,12 +36,20 @@ func (r *FeedRepository) PutPost(ctx context.Context, params storerepo.PutPostPa
 	if err != nil {
 		return fmt.Errorf("marshal langs: %w", err)
 	}
+	reasonJSON := ""
+	if post.Reason != nil {
+		reason, err := json.Marshal(post.Reason)
+		if err != nil {
+			return fmt.Errorf("marshal post reason: %w", err)
+		}
+		reasonJSON = string(reason)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	_, err = r.db.ExecContext(ctx, `
 		INSERT INTO feed_posts (
-			feed_id, feed_uri, post_uri, did, rkey, cid, indexed_at, langs_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			feed_id, feed_uri, post_uri, did, rkey, cid, indexed_at, langs_json, feed_context, reason_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(feed_id, post_uri) DO UPDATE SET
 			feed_uri = excluded.feed_uri,
 			did = excluded.did,
@@ -49,8 +57,10 @@ func (r *FeedRepository) PutPost(ctx context.Context, params storerepo.PutPostPa
 			cid = excluded.cid,
 			indexed_at = excluded.indexed_at,
 			langs_json = excluded.langs_json,
+			feed_context = excluded.feed_context,
+			reason_json = excluded.reason_json,
 			updated_at = excluded.updated_at;
-	`, params.FeedID, post.Feed, post.Uri, p.Did, p.Rkey, post.Cid, post.IndexedAt, string(langsJSON), now, now)
+	`, params.FeedID, post.Feed, post.Uri, p.Did, p.Rkey, post.Cid, post.IndexedAt, string(langsJSON), post.FeedContext, reasonJSON, now, now)
 	if err != nil {
 		return fmt.Errorf("put post: %w", err)
 	}
@@ -59,7 +69,7 @@ func (r *FeedRepository) PutPost(ctx context.Context, params storerepo.PutPostPa
 
 func (r *FeedRepository) ListPosts(ctx context.Context, params storerepo.ListPostsParams) ([]types.Post, error) {
 	query := `
-		SELECT feed_uri, post_uri, cid, indexed_at, langs_json
+		SELECT feed_uri, post_uri, cid, indexed_at, langs_json, feed_context, reason_json
 		FROM feed_posts
 		WHERE feed_id = ?
 		ORDER BY indexed_at DESC`
@@ -78,13 +88,15 @@ func (r *FeedRepository) ListPosts(ctx context.Context, params storerepo.ListPos
 	posts := make([]types.Post, 0)
 	for rows.Next() {
 		var (
-			feedURI   string
-			postURI   string
-			cid       string
-			indexedAt string
-			langsJSON string
+			feedURI     string
+			postURI     string
+			cid         string
+			indexedAt   string
+			langsJSON   string
+			feedContext sql.NullString
+			reasonJSON  sql.NullString
 		)
-		if err := rows.Scan(&feedURI, &postURI, &cid, &indexedAt, &langsJSON); err != nil {
+		if err := rows.Scan(&feedURI, &postURI, &cid, &indexedAt, &langsJSON, &feedContext, &reasonJSON); err != nil {
 			return nil, fmt.Errorf("scan post row: %w", err)
 		}
 		var langs []string
@@ -93,13 +105,23 @@ func (r *FeedRepository) ListPosts(ctx context.Context, params storerepo.ListPos
 				return nil, fmt.Errorf("unmarshal langs: %w", err)
 			}
 		}
-		posts = append(posts, types.Post{
+		post := types.Post{
 			Feed:      types.FeedUri(feedURI),
 			Uri:       types.PostUri(postURI),
 			Cid:       cid,
 			IndexedAt: indexedAt,
 			Langs:     langs,
-		})
+		}
+		if feedContext.Valid {
+			post.FeedContext = &feedContext.String
+		}
+		if reasonJSON.Valid && reasonJSON.String != "" {
+			post.Reason = new(types.PostReason)
+			if err := json.Unmarshal([]byte(reasonJSON.String), post.Reason); err != nil {
+				return nil, fmt.Errorf("unmarshal post reason: %w", err)
+			}
+		}
+		posts = append(posts, post)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate post rows: %w", err)
@@ -142,7 +164,7 @@ func (r *FeedRepository) TrimOverflow(ctx context.Context, params storerepo.Trim
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT feed_uri, post_uri, cid, indexed_at, langs_json
+		SELECT feed_uri, post_uri, cid, indexed_at, langs_json, feed_context, reason_json
 		FROM feed_posts
 		WHERE feed_id = ?
 		ORDER BY indexed_at DESC
@@ -156,13 +178,15 @@ func (r *FeedRepository) TrimOverflow(ctx context.Context, params storerepo.Trim
 	trimmedPosts := make([]types.Post, 0)
 	for rows.Next() {
 		var (
-			feedURI   string
-			postURI   string
-			cid       string
-			indexedAt string
-			langsJSON string
+			feedURI     string
+			postURI     string
+			cid         string
+			indexedAt   string
+			langsJSON   string
+			feedContext sql.NullString
+			reasonJSON  sql.NullString
 		)
-		if err := rows.Scan(&feedURI, &postURI, &cid, &indexedAt, &langsJSON); err != nil {
+		if err := rows.Scan(&feedURI, &postURI, &cid, &indexedAt, &langsJSON, &feedContext, &reasonJSON); err != nil {
 			return nil, fmt.Errorf("scan overflow row: %w", err)
 		}
 		var langs []string
@@ -171,13 +195,23 @@ func (r *FeedRepository) TrimOverflow(ctx context.Context, params storerepo.Trim
 				return nil, fmt.Errorf("unmarshal overflow langs: %w", err)
 			}
 		}
-		trimmedPosts = append(trimmedPosts, types.Post{
+		post := types.Post{
 			Feed:      types.FeedUri(feedURI),
 			Uri:       types.PostUri(postURI),
 			Cid:       cid,
 			IndexedAt: indexedAt,
 			Langs:     langs,
-		})
+		}
+		if feedContext.Valid {
+			post.FeedContext = &feedContext.String
+		}
+		if reasonJSON.Valid && reasonJSON.String != "" {
+			post.Reason = new(types.PostReason)
+			if err := json.Unmarshal([]byte(reasonJSON.String), post.Reason); err != nil {
+				return nil, fmt.Errorf("unmarshal overflow post reason: %w", err)
+			}
+		}
+		trimmedPosts = append(trimmedPosts, post)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate overflow rows: %w", err)

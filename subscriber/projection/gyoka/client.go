@@ -274,11 +274,27 @@ func addPostInput(params PostParams) *gyokaschema.FeedAddPost_Input {
 	return &gyokaschema.FeedAddPost_Input{
 		Feed: string(params.FeedUri),
 		Post: &gyokaschema.FeedAddPost_PostInput{
-			Cid:       params.Cid,
-			IndexedAt: &indexedAt,
-			Languages: params.Langs,
-			Uri:       postURI(params.Did, params.Rkey),
+			Cid:         params.Cid,
+			FeedContext: params.FeedContext,
+			IndexedAt:   &indexedAt,
+			Languages:   params.Langs,
+			Reason:      addPostReason(params.Reason),
+			Uri:         postURI(params.Did, params.Rkey),
 		},
+	}
+}
+
+func addPostReason(reason *PostReason) *gyokaschema.FeedAddPost_PostInput_Reason {
+	if reason == nil {
+		return nil
+	}
+	if reason.Repost != nil {
+		return &gyokaschema.FeedAddPost_PostInput_Reason{
+			FeedAddPost_SkeletonReasonRepost: &gyokaschema.FeedAddPost_SkeletonReasonRepost{Repost: *reason.Repost},
+		}
+	}
+	return &gyokaschema.FeedAddPost_PostInput_Reason{
+		FeedAddPost_SkeletonReasonPin: &gyokaschema.FeedAddPost_SkeletonReasonPin{},
 	}
 }
 
@@ -287,10 +303,12 @@ func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedBatchAddPosts_I
 	for _, entry := range params.Entries {
 		indexedAt := entry.IndexedAt.UTC().Format(time.RFC3339Nano)
 		postsByFeed[string(entry.FeedUri)] = append(postsByFeed[string(entry.FeedUri)], &gyokaschema.FeedBatchAddPosts_PostInput{
-			Cid:       entry.Cid,
-			IndexedAt: &indexedAt,
-			Languages: entry.Langs,
-			Uri:       postURI(entry.Did, entry.Rkey),
+			Cid:         entry.Cid,
+			FeedContext: entry.FeedContext,
+			IndexedAt:   &indexedAt,
+			Languages:   entry.Langs,
+			Reason:      batchAddPostReason(entry.Reason),
+			Uri:         postURI(entry.Did, entry.Rkey),
 		})
 	}
 	entries := make([]*gyokaschema.FeedBatchAddPosts_EntryInput, 0, len(postsByFeed))
@@ -298,6 +316,20 @@ func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedBatchAddPosts_I
 		entries = append(entries, &gyokaschema.FeedBatchAddPosts_EntryInput{Feed: feed, Posts: posts})
 	}
 	return &gyokaschema.FeedBatchAddPosts_Input{Entries: entries}
+}
+
+func batchAddPostReason(reason *PostReason) *gyokaschema.FeedBatchAddPosts_PostInput_Reason {
+	if reason == nil {
+		return nil
+	}
+	if reason.Repost != nil {
+		return &gyokaschema.FeedBatchAddPosts_PostInput_Reason{
+			FeedBatchAddPosts_SkeletonReasonRepost: &gyokaschema.FeedBatchAddPosts_SkeletonReasonRepost{Repost: *reason.Repost},
+		}
+	}
+	return &gyokaschema.FeedBatchAddPosts_PostInput_Reason{
+		FeedBatchAddPosts_SkeletonReasonPin: &gyokaschema.FeedBatchAddPosts_SkeletonReasonPin{},
+	}
 }
 
 func batchRemovePostsInput(params BatchDeleteParams) *gyokaschema.FeedBatchRemovePosts_Input {
@@ -360,6 +392,9 @@ func (e *GyokaEditor) Add(params PostParams) error {
 	if err := params.FeedUri.Validate(); err != nil {
 		return fmt.Errorf("invalid feed uri: %w", err)
 	}
+	if err := params.Reason.Validate(); err != nil {
+		return fmt.Errorf("invalid post reason: %w", err)
+	}
 	return e.processRequest(&feedRequest{operation: "add", addParams: params})
 }
 
@@ -373,6 +408,9 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 	for _, entry := range params.Entries {
 		if err := entry.FeedUri.Validate(); err != nil {
 			return fmt.Errorf("invalid feed uri: %w", err)
+		}
+		if err := entry.Reason.Validate(); err != nil {
+			return fmt.Errorf("invalid post reason: %w", err)
 		}
 	}
 	return e.processRequest(&feedRequest{operation: "batchAdd", batchAddParams: params})

@@ -28,7 +28,7 @@ type Store interface {
 	SetFeedUri(uri types.FeedUri)
 
 	// Add a new post
-	Add(did string, rkey string, cid string, t time.Time, langs []string) error
+	Add(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error
 
 	// Delete specified post
 	Delete(did string, rkey string) error
@@ -218,7 +218,7 @@ func (s *StoreImpl) listPost(did string) []types.Post {
 	return filteredPosts
 }
 
-func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs []string) error {
+func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -227,12 +227,18 @@ func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs 
 		return nil
 	}
 
+	var postMetadata types.PostMetadata
+	if len(metadata) > 0 {
+		postMetadata = metadata[0]
+	}
 	post := types.Post{
-		Feed:      s.feedUri,
-		Uri:       types.PostUri(uri),
-		Cid:       cid,
-		IndexedAt: t.UTC().Format(time.RFC3339Nano),
-		Langs:     langs,
+		Feed:        s.feedUri,
+		Uri:         types.PostUri(uri),
+		Cid:         cid,
+		IndexedAt:   t.UTC().Format(time.RFC3339Nano),
+		Langs:       langs,
+		FeedContext: postMetadata.FeedContext,
+		Reason:      postMetadata.Reason,
 	}
 
 	s.posts = append(s.posts, post)

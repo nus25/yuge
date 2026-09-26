@@ -25,7 +25,7 @@ const (
 type Feed interface {
 	FeedId() string
 	FeedUri() string
-	AddPost(did string, rkey string, cid string, t time.Time, langs []string) error
+	AddPost(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error
 	DeletePost(did string, rkey string) error
 	PlanDelete(did string, rkey string) ([]logicblock.PostMutation, error)
 	ApplyPostMutations(mutations []logicblock.PostMutation) error
@@ -211,8 +211,8 @@ func (f *feedImpl) Trim(remain int) error {
 	return f.store.Trim(remain)
 }
 
-func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {
-	return f.store.Add(did, rkey, cid, t, langs)
+func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error {
+	return f.store.Add(did, rkey, cid, t, langs, metadata...)
 }
 
 func (f *feedImpl) DeletePost(did string, rkey string) error {

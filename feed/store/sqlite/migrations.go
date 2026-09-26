@@ -17,6 +17,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			cid TEXT NOT NULL,
 			indexed_at TEXT NOT NULL,
 			langs_json TEXT,
+			feed_context TEXT,
+			reason_json TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (feed_id, post_uri)

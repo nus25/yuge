@@ -1222,10 +1222,16 @@ func TestAPIHandler_PostOperationsUseCoordinator(t *testing.T) {
 
 		testDid := "did:plc:test123"
 		testRkey := "testrkey456"
+		feedContext := "matches the requested topic"
+		repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 		postData := map[string]any{
-			"cid":       "bafyreia1",
-			"indexedAt": "2024-01-01T00:00:00Z",
-			"langs":     []string{"en", "ja"},
+			"cid":         "bafyreia1",
+			"indexedAt":   "2024-01-01T00:00:00Z",
+			"langs":       []string{"en", "ja"},
+			"feedContext": feedContext,
+			"reason": map[string]any{
+				"repost": repostURI,
+			},
 		}
 
 		req, _ := http.NewRequest("POST", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
@@ -1246,12 +1252,55 @@ func TestAPIHandler_PostOperationsUseCoordinator(t *testing.T) {
 		if spy.lastAddParams.TrimAt != 24 || spy.lastAddParams.TrimRemain != 20 {
 			t.Fatalf("coordinator trim params = (%d, %d), want (24, 20)", spy.lastAddParams.TrimAt, spy.lastAddParams.TrimRemain)
 		}
+		if spy.lastAddParams.FeedContext == nil || *spy.lastAddParams.FeedContext != feedContext {
+			t.Fatalf("coordinator FeedContext = %v, want %q", spy.lastAddParams.FeedContext, feedContext)
+		}
+		if spy.lastAddParams.Reason == nil || spy.lastAddParams.Reason.Repost == nil || *spy.lastAddParams.Reason.Repost != repostURI {
+			t.Fatalf("coordinator Reason = %+v, want repost %q", spy.lastAddParams.Reason, repostURI)
+		}
 
 		req, _ = http.NewRequest("GET", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
 		recorder = httptest.NewRecorder()
 		router.ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+		var response GetPostByRkeyResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("unmarshal added post response: %v", err)
+		}
+		if response.Post.FeedContext == nil || *response.Post.FeedContext != feedContext {
+			t.Fatalf("stored FeedContext = %v, want %q", response.Post.FeedContext, feedContext)
+		}
+		if response.Post.Reason == nil || response.Post.Reason.Repost == nil || *response.Post.Reason.Repost != repostURI {
+			t.Fatalf("stored Reason = %+v, want repost %q", response.Post.Reason, repostURI)
+		}
+
+		req, _ = http.NewRequest("DELETE", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
+		recorder = httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("metadata-bearing post delete status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+		var deleteResponse DeletePostByRkeyResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &deleteResponse); err != nil {
+			t.Fatalf("unmarshal deleted post response: %v", err)
+		}
+		if deleteResponse.Deleted.FeedContext == nil || *deleteResponse.Deleted.FeedContext != feedContext {
+			t.Fatalf("deleted FeedContext = %v, want %q", deleteResponse.Deleted.FeedContext, feedContext)
+		}
+	})
+
+	t.Run("add rejects invalid reason", func(t *testing.T) {
+		req, _ := http.NewRequest("POST", "/api/feed/test-feed/post/did:plc:invalid/post-1", createJSONBody(t, map[string]any{
+			"cid":    "bafy-invalid-reason",
+			"reason": map[string]any{},
+		}))
+		req.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("invalid reason status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
 	})
 
@@ -1805,7 +1854,7 @@ func TestAPIHandler_AddAcceptedPost_WaitsForClearFeedOnSameFeed(t *testing.T) {
 
 	addErrCh := make(chan error, 1)
 	go func() {
-		addErrCh <- api.addAcceptedPost(ctx, definition.ID, info.Feed, "did:plc:new", "post2", "cid-new", time.Date(2026, 5, 11, 10, 1, 0, 0, time.UTC), []string{"en"})
+		addErrCh <- api.addAcceptedPost(ctx, definition.ID, info.Feed, "did:plc:new", "post2", "cid-new", time.Date(2026, 5, 11, 10, 1, 0, 0, time.UTC), []string{"en"}, nil, nil)
 	}()
 
 	select {
