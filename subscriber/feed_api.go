@@ -390,6 +390,17 @@ func projectionResponseFromEntry(entry projectionrepo.Entry) projectionOpRespons
 	}
 }
 
+type projectionOpDetailResponse struct {
+	projectionOpResponse
+	PayloadJSON string `json:"payload"`
+}
+
+func projectionDetailResponseFromEntry(entry projectionrepo.Entry) projectionOpDetailResponse {
+	return projectionOpDetailResponse{
+		projectionOpResponse: projectionResponseFromEntry(entry),
+		PayloadJSON:          entry.PayloadJSON,
+	}
+}
 func projectionSummaryCounts(counts []projectionrepo.StatusCount) map[string]int64 {
 	summary := make(map[string]int64, len(projectionOutboxStatuses))
 	for _, status := range projectionOutboxStatuses {
@@ -463,6 +474,27 @@ func (h *FeedApiHandler) ListProjectionOps(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"entries": responseEntries,
 	})
+}
+
+func (h *FeedApiHandler) GetProjectionOp(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+	entryID, ok := parseProjectionOpID(c)
+	if !ok {
+		return
+	}
+	entry, found, err := h.ProjectionOutbox.GetByID(c.Request.Context(), entryID)
+	if err != nil {
+		respondWithError(c, http.StatusInternalServerError, "failed to get projection op", err)
+		return
+	}
+	if !found {
+		respondWithError(c, http.StatusNotFound, "projection op not found", nil)
+		return
+	}
+	c.JSON(http.StatusOK, projectionDetailResponseFromEntry(entry))
 }
 
 func (h *FeedApiHandler) GetProjectionOpSummary(c *gin.Context) {

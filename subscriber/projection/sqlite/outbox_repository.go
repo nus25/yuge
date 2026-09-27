@@ -180,6 +180,23 @@ func (r *OutboxRepository) ListByStatus(ctx context.Context, params projectionre
 	return entries, nil
 }
 
+func (r *OutboxRepository) GetByID(ctx context.Context, id int64) (projectionrepo.Entry, bool, error) {
+	entry, err := scanOutboxEntry(r.db.QueryRowContext(ctx, `
+		SELECT id, feed_id, feed_uri, target, operation, mutation_id, subject_key, op_key,
+			payload_json, status, retry_count, COALESCE(next_retry_at, ''), COALESCE(last_error, ''),
+			created_at, updated_at, COALESCE(completed_at, '')
+		FROM projection_outbox
+		WHERE id = ?;
+	`, id))
+	if err == sql.ErrNoRows {
+		return projectionrepo.Entry{}, false, nil
+	}
+	if err != nil {
+		return projectionrepo.Entry{}, false, fmt.Errorf("get outbox entry: %w", err)
+	}
+	return entry, true, nil
+}
+
 func (r *OutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT status, count

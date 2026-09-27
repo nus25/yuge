@@ -243,6 +243,14 @@
     </table>
 
     <fieldset>
+      <legend>オペレーション詳細</legend>
+      <label for="projectionOpsDetailId">ID:</label>
+      <input type="number" id="projectionOpsDetailId" min="1" step="1" placeholder="123" />
+      <button onclick="loadProjectionOpDetail()">Get Detail</button>
+      <pre id="projectionOpsDetailResult" class="scrollable"></pre>
+    </fieldset>
+
+    <fieldset>
       <legend>完了済みオペレーションの一括削除</legend>
       <button class="danger" onclick="purgeCompletedProjectionOps()">Purge Completed</button>
       <pre id="projectionOpsActionResult"></pre>
@@ -643,12 +651,24 @@
           <td>${entry.lastError || ""}</td>
           <td>${entry.updatedAt}</td>
           <td>
+            <button onclick="loadProjectionOpDetail(${entry.id})">Details</button>
             <button onclick="retryProjectionOp(${entry.id})">Retry</button>
             <button class="danger" onclick="deleteProjectionOp(${entry.id})">Delete</button>
           </td>
         `;
         tbody.appendChild(tr);
       });
+    }
+
+    async function loadProjectionOpDetail(id) {
+      if (!apiBase) return alert("API base URL is not set.");
+      const detailId = id || document.getElementById("projectionOpsDetailId").value.trim();
+      if (!detailId || !/^\d+$/.test(String(detailId)) || Number(detailId) <= 0) {
+        return alert("Projection operation ID must be a positive number.");
+      }
+      document.getElementById("projectionOpsDetailId").value = detailId;
+      const res = await fetch(`${apiBase}/api/admin/projection/ops/${encodeURIComponent(detailId)}`);
+      await renderResult("projectionOpsDetailResult", res);
     }
 
     async function retryProjectionOp(id) {

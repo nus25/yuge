@@ -480,6 +480,87 @@ func TestFeedAPI_ListProjectionOps_ReturnsFailedEntries(t *testing.T) {
 	}
 }
 
+func TestFeedAPI_GetProjectionOp_ReturnsFailedEntryDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api-detail.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-detail",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/detail",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-detail",
+		SubjectKey:  "feed-detail:post-1",
+		OpKey:       "m-detail:add:post-1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	if err := repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
+		ID:          claimed.ID,
+		LastError:   "temporary failure",
+		NextRetryAt: time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("MarkRetryableFailure() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.New()
+	router.GET("/api/admin/projection/ops/:id", api.GetProjectionOp)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops/"+strconv.FormatInt(claimed.ID, 10), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if response["status"] != "failed" {
+		t.Fatalf("status = %v, want failed", response["status"])
+	}
+	if response["lastError"] != "temporary failure" {
+		t.Fatalf("lastError = %v, want temporary failure", response["lastError"])
+	}
+	if response["payload"] != `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}` {
+		t.Fatalf("payload = %v, want original payload JSON", response["payload"])
+	}
+
+	req, _ = http.NewRequest("GET", "/api/admin/projection/ops/999", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing entry status = %d, want %d body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+	}
+}
+
 func TestFeedAPI_RetryProjectionOp_RequeuesDeadEntry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
@@ -865,6 +946,22 @@ func TestFeedAPI_RetryProjectionOp_RejectsInvalidID(t *testing.T) {
 	}
 }
 
+func TestFeedAPI_GetProjectionOp_RejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = noopOutboxRepository{}
+	router := gin.Default()
+	router.GET("/api/admin/projection/ops/:id", api.GetProjectionOp)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops/not-a-number", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
 func TestFeedAPI_PurgeCompletedProjectionOps_RejectsMalformedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	api := NewFeedApiHandler(nil)
@@ -894,6 +991,10 @@ func (noopOutboxRepository) ClearFeed(ctx context.Context, params projectionrepo
 
 func (noopOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
 	return nil, errors.New("unexpected ListByStatus call")
+}
+
+func (noopOutboxRepository) GetByID(ctx context.Context, id int64) (projectionrepo.Entry, bool, error) {
+	return projectionrepo.Entry{}, false, errors.New("unexpected GetByID call")
 }
 
 func (noopOutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {

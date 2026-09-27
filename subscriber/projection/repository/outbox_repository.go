@@ -106,6 +106,7 @@ type OutboxRepository interface {
 	Enqueue(ctx context.Context, params EnqueueParams) error
 	ClearFeed(ctx context.Context, params ClearFeedParams) error
 	ListByStatus(ctx context.Context, params ListByStatusParams) ([]Entry, error)
+	GetByID(ctx context.Context, id int64) (Entry, bool, error)
 	CountByStatus(ctx context.Context, params CountByStatusParams) ([]StatusCount, error)
 	ClaimNextPending(ctx context.Context, params ClaimNextPendingParams) (Entry, bool, error)
 	ClaimNextPendingBatch(ctx context.Context, params ClaimNextPendingBatchParams) ([]Entry, bool, error)
