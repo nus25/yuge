@@ -7,11 +7,33 @@ import (
 	apibsky "github.com/bluesky-social/indigo/api/bsky"
 	"github.com/nus25/yuge/feed/config/types"
 	"github.com/nus25/yuge/feed/metrics"
+	feedtypes "github.com/nus25/yuge/types"
 )
 
-// PreDeleteHandler is an interface for logic blocks that handle pre-delete events
+type PostStore interface {
+	List(did string) []feedtypes.Post
+	GetPost(did string, rkey string) (post *feedtypes.Post, exists bool)
+}
+
+type PostMutationOperation string
+
+const (
+	PostMutationAdd    PostMutationOperation = "add"
+	PostMutationDelete PostMutationOperation = "delete"
+)
+
+type PostMutation struct {
+	Operation PostMutationOperation
+	Post      feedtypes.Post
+}
+
+// PreDeleteHandler plans post mutations to apply with the deletion.
 type PreDeleteHandler interface {
-	HandlePreDelete(did string, rkey string) error
+	HandlePreDelete(store PostStore, did string, rkey string) ([]PostMutation, error)
+}
+
+type PostDeleteHandler interface {
+	HandlePostDelete(did string, rkey string)
 }
 
 type MetricProvider interface {

@@ -16,10 +16,11 @@ import (
 const defaultSQLiteFilename = "yuge.db"
 
 type sqliteRuntimePersistence struct {
-	mutationDB          *sql.DB
-	loaderDB            *sql.DB
-	mutationCoordinator *FeedMutationCoordinator
-	postLoader          storepkg.PostLoader
+	mutationDB           *sql.DB
+	loaderDB             *sql.DB
+	mutationCoordinator  *FeedMutationCoordinator
+	postLoader           storepkg.PostLoader
+	logicBlockStateStore *storesqlite.LogicBlockStateRepository
 }
 
 func (p *sqliteRuntimePersistence) Close() error {
@@ -95,10 +96,11 @@ func openSQLiteRuntimePersistence(ctx context.Context, dataDir string) (*sqliteR
 	}
 
 	return &sqliteRuntimePersistence{
-		mutationDB:          mutationDB,
-		loaderDB:            loaderDB,
-		mutationCoordinator: NewFeedMutationCoordinator(NewSQLiteFeedMutationTransactor(mutationDB, SQLiteFeedMutationTransactorOptions{})),
-		postLoader:          newSQLitePostLoader(loaderDB),
+		mutationDB:           mutationDB,
+		loaderDB:             loaderDB,
+		mutationCoordinator:  NewFeedMutationCoordinator(NewSQLiteFeedMutationTransactor(mutationDB, SQLiteFeedMutationTransactorOptions{})),
+		postLoader:           newSQLitePostLoader(loaderDB),
+		logicBlockStateStore: storesqlite.NewLogicBlockStateRepository(mutationDB),
 	}, nil
 }
 

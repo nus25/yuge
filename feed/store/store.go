@@ -11,6 +11,7 @@ import (
 
 	"github.com/nus25/yuge/feed/config/store"
 	cfgTypes "github.com/nus25/yuge/feed/config/types"
+	"github.com/nus25/yuge/feed/logicblock"
 	"github.com/nus25/yuge/types"
 )
 
@@ -27,10 +28,13 @@ type Store interface {
 	SetFeedUri(uri types.FeedUri)
 
 	// Add a new post
-	Add(did string, rkey string, cid string, t time.Time, langs []string) error
+	Add(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error
 
 	// Delete specified post
 	Delete(did string, rkey string) error
+
+	// ApplyPostMutations applies related post mutations while holding the store lock.
+	ApplyPostMutations(mutations []logicblock.PostMutation) error
 
 	// Delete posts by DID
 	DeleteByDid(did string) (deleted []types.Post, err error)
@@ -214,7 +218,7 @@ func (s *StoreImpl) listPost(did string) []types.Post {
 	return filteredPosts
 }
 
-func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs []string) error {
+func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -223,11 +227,18 @@ func (s *StoreImpl) Add(did string, rkey string, cid string, t time.Time, langs 
 		return nil
 	}
 
+	var postMetadata types.PostMetadata
+	if len(metadata) > 0 {
+		postMetadata = metadata[0]
+	}
 	post := types.Post{
-		Uri:       types.PostUri(uri),
-		Cid:       cid,
-		IndexedAt: t.UTC().Format(time.RFC3339Nano),
-		//Language is not supported in cache
+		Feed:        s.feedUri,
+		Uri:         types.PostUri(uri),
+		Cid:         cid,
+		IndexedAt:   t.UTC().Format(time.RFC3339Nano),
+		Langs:       langs,
+		FeedContext: postMetadata.FeedContext,
+		Reason:      postMetadata.Reason,
 	}
 
 	s.posts = append(s.posts, post)
@@ -247,6 +258,38 @@ func (s *StoreImpl) Delete(did string, rkey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.deletePost(did, rkey)
+}
+
+func (s *StoreImpl) ApplyPostMutations(mutations []logicblock.PostMutation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	added := false
+	for _, mutation := range mutations {
+		switch mutation.Operation {
+		case logicblock.PostMutationAdd:
+			post := mutation.Post
+			if post.Feed == "" {
+				post.Feed = s.feedUri
+			}
+			if _, exists := s.postIndex[post.Uri]; exists {
+				continue
+			}
+			s.posts = append(s.posts, post)
+			s.postIndex[post.Uri] = struct{}{}
+			added = true
+		case logicblock.PostMutationDelete:
+			if err := s.deletePostURI(mutation.Post.Uri); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported post mutation operation: %s", mutation.Operation)
+		}
+	}
+	if added && s.config != nil && s.config.GetTrimAt() > 0 && len(s.posts) > s.config.GetTrimAt() {
+		return s.trim(s.config.GetTrimRemain())
+	}
+	return nil
 }
 
 func (s *StoreImpl) DeleteByDid(did string) (deleted []types.Post, err error) {
@@ -270,12 +313,16 @@ func (s *StoreImpl) DeleteByDid(did string) (deleted []types.Post, err error) {
 
 func (s *StoreImpl) deletePost(did string, rkey string) error {
 	uri := fmt.Sprintf("at://%s/app.bsky.feed.post/%s", did, rkey)
-	if _, exists := s.postIndex[types.PostUri(uri)]; !exists {
+	return s.deletePostURI(types.PostUri(uri))
+}
+
+func (s *StoreImpl) deletePostURI(uri types.PostUri) error {
+	if _, exists := s.postIndex[uri]; !exists {
 		return nil
 	}
 
 	for i, post := range s.posts {
-		if post.Uri == types.PostUri(uri) {
+		if post.Uri == uri {
 			s.posts = append(s.posts[:i], s.posts[i+1:]...)
 			delete(s.postIndex, post.Uri)
 			break

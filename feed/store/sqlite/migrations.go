@@ -17,6 +17,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			cid TEXT NOT NULL,
 			indexed_at TEXT NOT NULL,
 			langs_json TEXT,
+			feed_context TEXT,
+			reason_json TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (feed_id, post_uri)
@@ -32,6 +34,14 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			config_revision TEXT,
 			last_loaded_at TEXT,
 			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS logic_block_state (
+			feed_id TEXT NOT NULL,
+			block_key TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			state_json TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (feed_id, block_key)
 		);`,
 		`CREATE TABLE IF NOT EXISTS projection_outbox (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

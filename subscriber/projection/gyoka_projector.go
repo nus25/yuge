@@ -63,12 +63,14 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
 		if err := p.mutator.Add(gyoka.PostParams{
-			FeedUri:   payload.FeedURI,
-			Did:       parsedURI.Did,
-			Rkey:      parsedURI.Rkey,
-			Cid:       payload.Post.Cid,
-			IndexedAt: indexedAt,
-			Langs:     payload.Post.Langs,
+			FeedUri:     payload.FeedURI,
+			Did:         parsedURI.Did,
+			Rkey:        parsedURI.Rkey,
+			Cid:         payload.Post.Cid,
+			IndexedAt:   indexedAt,
+			Langs:       payload.Post.Langs,
+			FeedContext: payload.Post.FeedContext,
+			Reason:      payload.Post.Reason,
 		}); err != nil {
 			var nonRetryableErr *gyoka.NonRetryableError
 			if errors.As(err, &nonRetryableErr) {
@@ -151,12 +153,14 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
 		batchAddEntries = append(batchAddEntries, gyoka.PostParams{
-			FeedUri:   payload.FeedURI,
-			Did:       parsedURI.Did,
-			Rkey:      parsedURI.Rkey,
-			Cid:       payload.Post.Cid,
-			IndexedAt: indexedAt,
-			Langs:     payload.Post.Langs,
+			FeedUri:     payload.FeedURI,
+			Did:         parsedURI.Did,
+			Rkey:        parsedURI.Rkey,
+			Cid:         payload.Post.Cid,
+			IndexedAt:   indexedAt,
+			Langs:       payload.Post.Langs,
+			FeedContext: payload.Post.FeedContext,
+			Reason:      payload.Post.Reason,
 		})
 	}
 	if operation == "delete" {

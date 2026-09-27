@@ -14,6 +14,7 @@ import (
 	"github.com/bluesky-social/jetstream/pkg/models"
 	"github.com/nus25/yuge/feed/config/provider"
 	cfgTypes "github.com/nus25/yuge/feed/config/types"
+	"github.com/nus25/yuge/feed/logicblock"
 	"github.com/nus25/yuge/feed/metrics"
 	storerepo "github.com/nus25/yuge/feed/store/repository"
 	storesqlite "github.com/nus25/yuge/feed/store/sqlite"
@@ -33,6 +34,10 @@ func (c *blockingDeleteCoordinator) AddPost(ctx context.Context, params AddPostP
 
 func (c *blockingDeleteCoordinator) DeletePost(ctx context.Context, params DeletePostParams) error {
 	return c.inner.DeletePost(ctx, params)
+}
+
+func (c *blockingDeleteCoordinator) ApplyPostMutations(ctx context.Context, params ApplyPostMutationsParams) error {
+	return c.inner.ApplyPostMutations(ctx, params)
 }
 
 func (c *blockingDeleteCoordinator) ClearFeed(ctx context.Context, params ClearFeedParams) error {
@@ -82,6 +87,20 @@ func (s *spyPostMutationCoordinator) DeletePost(ctx context.Context, params Dele
 	return s.deletePostErr
 }
 
+func (s *spyPostMutationCoordinator) ApplyPostMutations(ctx context.Context, params ApplyPostMutationsParams) error {
+	s.deletePostCalls++
+	for _, mutation := range params.Mutations {
+		if mutation.Operation == logicblock.PostMutationDelete {
+			s.lastDeleteParams = DeletePostParams{FeedID: params.FeedID, FeedURI: params.FeedURI, Post: mutation.Post}
+			break
+		}
+	}
+	if s.sequence != nil {
+		*s.sequence = append(*s.sequence, "coordinator")
+	}
+	return s.deletePostErr
+}
+
 func (s *spyPostMutationCoordinator) ClearFeed(ctx context.Context, params ClearFeedParams) error {
 	s.clearFeedCalls++
 	s.lastClearParams = params
@@ -120,7 +139,7 @@ type fakeHandlerFeed struct {
 
 func (f *fakeHandlerFeed) FeedId() string  { return f.feedID }
 func (f *fakeHandlerFeed) FeedUri() string { return f.feedURI }
-func (f *fakeHandlerFeed) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {
+func (f *fakeHandlerFeed) AddPost(did string, rkey string, cid string, t time.Time, langs []string, _ ...types.PostMetadata) error {
 	f.addPostCalls++
 	f.lastDid = did
 	f.lastRkey = rkey
@@ -136,6 +155,21 @@ func (f *fakeHandlerFeed) DeletePost(did string, rkey string) error {
 	f.deletePostCalls++
 	f.lastDeletedDid = did
 	f.lastDeletedRkey = rkey
+	if f.sequence != nil {
+		*f.sequence = append(*f.sequence, "feed")
+	}
+	return f.deletePostErr
+}
+func (f *fakeHandlerFeed) PlanDelete(did string, rkey string) ([]logicblock.PostMutation, error) {
+	f.lastDeletedDid = did
+	f.lastDeletedRkey = rkey
+	return []logicblock.PostMutation{{
+		Operation: logicblock.PostMutationDelete,
+		Post:      types.Post{Uri: types.PostUri("at://" + did + "/app.bsky.feed.post/" + rkey)},
+	}}, nil
+}
+func (f *fakeHandlerFeed) ApplyPostMutations(mutations []logicblock.PostMutation) error {
+	f.deletePostCalls++
 	if f.sequence != nil {
 		*f.sequence = append(*f.sequence, "feed")
 	}
@@ -459,7 +493,7 @@ func TestHandlerDeleteAcceptedPost(t *testing.T) {
 		}
 		h := &Handler{logger: logger, MutationCoordinator: coordinator}
 
-		err := h.deleteAcceptedPost(context.Background(), feed.FeedId(), feed, evt, post)
+		err := h.deleteAcceptedPost(context.Background(), feed.FeedId(), feed, evt)
 		if err != nil {
 			t.Fatalf("deleteAcceptedPost() error = %v", err)
 		}
@@ -488,7 +522,7 @@ func TestHandlerDeleteAcceptedPost(t *testing.T) {
 		feed := &fakeHandlerFeed{feedID: "feed-1", feedURI: "at://did:plc:test/app.bsky.feed.generator/sample"}
 		h := &Handler{logger: logger, MutationCoordinator: coordinator}
 
-		err := h.deleteAcceptedPost(context.Background(), feed.FeedId(), feed, evt, post)
+		err := h.deleteAcceptedPost(context.Background(), feed.FeedId(), feed, evt)
 		if err == nil {
 			t.Fatal("expected deleteAcceptedPost to fail")
 		}

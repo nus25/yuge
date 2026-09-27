@@ -65,11 +65,13 @@ func TestGyokaProjector_Project_AddEntry(t *testing.T) {
 
 	mutator := &spyGyokaMutator{}
 	projector := NewGyokaProjector(mutator)
+	feedContext := "matches the requested topic"
+	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 	entry := projectionrepo.Entry{
 		ID:          1,
 		Target:      "gyoka",
 		Operation:   "add",
-		PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user1/app.bsky.feed.post/post1","cid":"cid-1","indexedAt":"2026-05-11T08:00:00Z","langs":["ja","en"]}}`,
+		PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user1/app.bsky.feed.post/post1","cid":"cid-1","indexedAt":"2026-05-11T08:00:00Z","langs":["ja","en"],"feedContext":"matches the requested topic","reason":{"repost":"at://did:plc:reposter/app.bsky.feed.repost/repost-1"}}}`,
 	}
 
 	if err := projector.Project(context.Background(), entry); err != nil {
@@ -92,6 +94,12 @@ func TestGyokaProjector_Project_AddEntry(t *testing.T) {
 	}
 	if !mutator.lastAdd.IndexedAt.Equal(time.Date(2026, 5, 11, 8, 0, 0, 0, time.UTC)) {
 		t.Fatalf("Add() IndexedAt = %v", mutator.lastAdd.IndexedAt)
+	}
+	if mutator.lastAdd.FeedContext == nil || *mutator.lastAdd.FeedContext != feedContext {
+		t.Fatalf("Add() FeedContext = %v, want %q", mutator.lastAdd.FeedContext, feedContext)
+	}
+	if mutator.lastAdd.Reason == nil || mutator.lastAdd.Reason.Repost == nil || *mutator.lastAdd.Reason.Repost != repostURI {
+		t.Fatalf("Add() Reason = %+v, want repost %q", mutator.lastAdd.Reason, repostURI)
 	}
 }
 
@@ -173,12 +181,13 @@ func TestGyokaProjector_ProjectBatch_AddEntries(t *testing.T) {
 
 	mutator := &spyGyokaMutator{}
 	projector := NewGyokaProjector(mutator)
+	feedContext := "matches the requested topic"
 	entries := []projectionrepo.Entry{
 		{
 			ID:          1,
 			Target:      "gyoka",
 			Operation:   "add",
-			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user1/app.bsky.feed.post/post1","cid":"cid-1","indexedAt":"2026-05-11T08:00:00Z","langs":["ja"]}}`,
+			PayloadJSON: `{"feedUri":"at://did:plc:test/app.bsky.feed.generator/sample","post":{"uri":"at://did:plc:user1/app.bsky.feed.post/post1","cid":"cid-1","indexedAt":"2026-05-11T08:00:00Z","langs":["ja"],"feedContext":"matches the requested topic"}}`,
 		},
 		{
 			ID:          2,
@@ -202,6 +211,9 @@ func TestGyokaProjector_ProjectBatch_AddEntries(t *testing.T) {
 	}
 	if mutator.lastBatch.Entries[0].Did != "did:plc:user1" || mutator.lastBatch.Entries[1].Did != "did:plc:user2" {
 		t.Fatalf("BatchAdd() entries = %+v", mutator.lastBatch.Entries)
+	}
+	if mutator.lastBatch.Entries[0].FeedContext == nil || *mutator.lastBatch.Entries[0].FeedContext != feedContext {
+		t.Fatalf("BatchAdd() FeedContext = %v, want %q", mutator.lastBatch.Entries[0].FeedContext, feedContext)
 	}
 }
 

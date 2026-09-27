@@ -390,6 +390,17 @@ func projectionResponseFromEntry(entry projectionrepo.Entry) projectionOpRespons
 	}
 }
 
+type projectionOpDetailResponse struct {
+	projectionOpResponse
+	PayloadJSON string `json:"payload"`
+}
+
+func projectionDetailResponseFromEntry(entry projectionrepo.Entry) projectionOpDetailResponse {
+	return projectionOpDetailResponse{
+		projectionOpResponse: projectionResponseFromEntry(entry),
+		PayloadJSON:          entry.PayloadJSON,
+	}
+}
 func projectionSummaryCounts(counts []projectionrepo.StatusCount) map[string]int64 {
 	summary := make(map[string]int64, len(projectionOutboxStatuses))
 	for _, status := range projectionOutboxStatuses {
@@ -463,6 +474,27 @@ func (h *FeedApiHandler) ListProjectionOps(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"entries": responseEntries,
 	})
+}
+
+func (h *FeedApiHandler) GetProjectionOp(c *gin.Context) {
+	if h.ProjectionOutbox == nil {
+		respondWithError(c, http.StatusServiceUnavailable, "projection outbox is not configured", nil)
+		return
+	}
+	entryID, ok := parseProjectionOpID(c)
+	if !ok {
+		return
+	}
+	entry, found, err := h.ProjectionOutbox.GetByID(c.Request.Context(), entryID)
+	if err != nil {
+		respondWithError(c, http.StatusInternalServerError, "failed to get projection op", err)
+		return
+	}
+	if !found {
+		respondWithError(c, http.StatusNotFound, "projection op not found", nil)
+		return
+	}
+	c.JSON(http.StatusOK, projectionDetailResponseFromEntry(entry))
 }
 
 func (h *FeedApiHandler) GetProjectionOpSummary(c *gin.Context) {
@@ -663,9 +695,11 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 
 	// POSTデータを受け取る
 	var req struct {
-		CID       string   `json:"cid"`
-		IndexedAt string   `json:"indexedAt"`
-		Langs     []string `json:"langs,omitempty"`
+		CID         string            `json:"cid"`
+		IndexedAt   string            `json:"indexedAt"`
+		Langs       []string          `json:"langs,omitempty"`
+		FeedContext *string           `json:"feedContext,omitempty"`
+		Reason      *types.PostReason `json:"reason,omitempty"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -676,6 +710,10 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 	// CIDの形式チェック
 	if len(req.CID) == 0 {
 		c.JSON(400, gin.H{"error": "invalid cid format: cid must not be empty"})
+		return
+	}
+	if err := req.Reason.Validate(); err != nil {
+		c.JSON(400, gin.H{"error": "invalid reason", "details": err.Error()})
 		return
 	}
 
@@ -698,14 +736,17 @@ func (h *FeedApiHandler) AddPost(c *gin.Context) {
 		t = time.Now()
 	}
 
-	if err := h.addAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, req.CID, t, req.Langs); err != nil {
+	if err := h.addAcceptedPost(c.Request.Context(), feedId, fi.Feed, did, rkey, req.CID, t, req.Langs, req.FeedContext, req.Reason); err != nil {
 		c.JSON(500, gin.H{"error": "failed to add post"})
 		return
 	}
 	post := types.Post{
-		Uri:       types.PostUri("at://" + did + "/app.bsky.feed.post/" + rkey),
-		Cid:       req.CID,
-		IndexedAt: t.UTC().Format(time.RFC3339Nano),
+		Uri:         types.PostUri("at://" + did + "/app.bsky.feed.post/" + rkey),
+		Cid:         req.CID,
+		IndexedAt:   t.UTC().Format(time.RFC3339Nano),
+		Langs:       req.Langs,
+		FeedContext: req.FeedContext,
+		Reason:      req.Reason,
 	}
 	c.JSON(200, AddPostResponse{
 		Message: "post added successfully",
@@ -805,7 +846,7 @@ func (h *FeedApiHandler) DeletePost(c *gin.Context) {
 	})
 }
 
-func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, cid string, indexedAt time.Time, langs []string) error {
+func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, cid string, indexedAt time.Time, langs []string, feedContext *string, reason *types.PostReason) error {
 	run := func() error {
 		trimAt := 0
 		trimRemain := 0
@@ -815,20 +856,22 @@ func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, tar
 		}
 		if h.MutationCoordinator != nil {
 			if err := h.MutationCoordinator.AddPost(ctx, AddPostParams{
-				FeedID:     feedID,
-				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
-				Did:        did,
-				Rkey:       rkey,
-				Cid:        cid,
-				IndexedAt:  indexedAt,
-				Langs:      langs,
-				TrimAt:     trimAt,
-				TrimRemain: trimRemain,
+				FeedID:      feedID,
+				FeedURI:     types.FeedUri(targetFeed.FeedUri()),
+				Did:         did,
+				Rkey:        rkey,
+				Cid:         cid,
+				IndexedAt:   indexedAt,
+				Langs:       langs,
+				FeedContext: feedContext,
+				Reason:      reason,
+				TrimAt:      trimAt,
+				TrimRemain:  trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted post: %w", err)
 			}
 		}
-		if err := targetFeed.AddPost(did, rkey, cid, indexedAt, langs); err != nil {
+		if err := targetFeed.AddPost(did, rkey, cid, indexedAt, langs, types.PostMetadata{FeedContext: feedContext, Reason: reason}); err != nil {
 			return fmt.Errorf("update feed cache: %w", err)
 		}
 		return nil
@@ -841,16 +884,28 @@ func (h *FeedApiHandler) addAcceptedPost(ctx context.Context, feedID string, tar
 
 func (h *FeedApiHandler) deleteAcceptedPost(ctx context.Context, feedID string, targetFeed feed.Feed, did string, rkey string, post types.Post) error {
 	run := func() error {
+		mutations, err := targetFeed.PlanDelete(did, rkey)
+		if err != nil {
+			return fmt.Errorf("plan accepted delete: %w", err)
+		}
+		trimAt := 0
+		trimRemain := 0
+		if cfg := targetFeed.Config(); cfg != nil && cfg.Store() != nil {
+			trimAt = cfg.Store().GetTrimAt()
+			trimRemain = cfg.Store().GetTrimRemain()
+		}
 		if h.MutationCoordinator != nil {
-			if err := h.MutationCoordinator.DeletePost(ctx, DeletePostParams{
-				FeedID:  feedID,
-				FeedURI: types.FeedUri(targetFeed.FeedUri()),
-				Post:    post,
+			if err := h.MutationCoordinator.ApplyPostMutations(ctx, ApplyPostMutationsParams{
+				FeedID:     feedID,
+				FeedURI:    types.FeedUri(targetFeed.FeedUri()),
+				Mutations:  mutations,
+				TrimAt:     trimAt,
+				TrimRemain: trimRemain,
 			}); err != nil {
 				return fmt.Errorf("persist accepted delete: %w", err)
 			}
 		}
-		if err := targetFeed.DeletePost(did, rkey); err != nil {
+		if err := targetFeed.ApplyPostMutations(mutations); err != nil {
 			return fmt.Errorf("update feed cache after delete: %w", err)
 		}
 		return nil

@@ -25,8 +25,10 @@ const (
 type Feed interface {
 	FeedId() string
 	FeedUri() string
-	AddPost(did string, rkey string, cid string, t time.Time, langs []string) error
+	AddPost(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error
 	DeletePost(did string, rkey string) error
+	PlanDelete(did string, rkey string) ([]logicblock.PostMutation, error)
+	ApplyPostMutations(mutations []logicblock.PostMutation) error
 	DeletePostByDid(did string) (deleted []types.Post, err error)
 	GetPost(did string, rkey string) (post types.Post, exists bool)
 	ListPost(did string) []types.Post
@@ -60,6 +62,9 @@ type FeedOptions struct {
 	// Logger is an optional logger for feed operations.
 	// If not specified, slog.Default() will be used.
 	Logger *slog.Logger
+
+	// LogicBlockStateStore persists state owned by stateful logic blocks.
+	LogicBlockStateStore logicblock.StateRepository
 }
 
 func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts FeedOptions) (Feed, error) {
@@ -118,6 +123,7 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 	// logicblock
 	var logicblocks []logicblock.LogicBlock
 
+	blockTypeCounts := make(map[string]int)
 	for _, blockCfg := range cfg.FeedLogic().GetLogicBlockConfigs() {
 		// 各ブロックの作成時にもコンテキストをチェック
 		select {
@@ -132,6 +138,17 @@ func NewFeedWithOptions(ctx context.Context, feedId string, feedUri string, opts
 			return nil, errors.NewDependencyError("Feed", "logicBlock", fmt.Sprintf("failed to create logic block: %v", err))
 		}
 		logicblocks = append(logicblocks, block)
+		if stateful, ok := block.(logicblock.StatefulLogicBlock); ok && opts.LogicBlockStateStore != nil {
+			blockTypeCounts[block.BlockType()]++
+			blockKey := block.BlockName()
+			if blockKey == "" {
+				blockKey = fmt.Sprintf("%s:%d", block.BlockType(), blockTypeCounts[block.BlockType()])
+				lg.Warn("stateful logic block has no name; use a name to keep its persisted state stable when configuration order changes", "block", block.BlockType(), "state_key", blockKey)
+			}
+			if err := stateful.RestoreState(ctx, feedId, blockKey, opts.LogicBlockStateStore); err != nil {
+				return nil, errors.NewDependencyError("Feed", "logicBlockState", fmt.Sprintf("failed to restore logic block state: %v", err))
+			}
+		}
 	}
 
 	// feed
@@ -194,19 +211,62 @@ func (f *feedImpl) Trim(remain int) error {
 	return f.store.Trim(remain)
 }
 
-func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string) error {
-	return f.store.Add(did, rkey, cid, t, langs)
+func (f *feedImpl) AddPost(did string, rkey string, cid string, t time.Time, langs []string, metadata ...types.PostMetadata) error {
+	return f.store.Add(did, rkey, cid, t, langs, metadata...)
 }
 
 func (f *feedImpl) DeletePost(did string, rkey string) error {
+	mutations, err := f.PlanDelete(did, rkey)
+	if err != nil {
+		return err
+	}
+	return f.ApplyPostMutations(mutations)
+}
+
+func (f *feedImpl) PlanDelete(did string, rkey string) ([]logicblock.PostMutation, error) {
+	post, exists := f.store.GetPost(did, rkey)
+	if !exists {
+		return nil, nil
+	}
+	mutations := make([]logicblock.PostMutation, 0, 1)
 	for _, b := range f.logicblocks {
 		if handler, ok := b.(logicblock.PreDeleteHandler); ok {
-			if err := handler.HandlePreDelete(did, rkey); err != nil {
-				return err
+			planned, err := handler.HandlePreDelete(f.store, did, rkey)
+			if err != nil {
+				return nil, err
+			}
+			mutations = append(mutations, planned...)
+		}
+	}
+	deleted := *post
+	if deleted.Feed == "" {
+		deleted.Feed = f.uri
+	}
+	return append(mutations, logicblock.PostMutation{
+		Operation: logicblock.PostMutationDelete,
+		Post:      deleted,
+	}), nil
+}
+
+func (f *feedImpl) ApplyPostMutations(mutations []logicblock.PostMutation) error {
+	if err := f.store.ApplyPostMutations(mutations); err != nil {
+		return err
+	}
+	for _, mutation := range mutations {
+		if mutation.Operation != logicblock.PostMutationDelete {
+			continue
+		}
+		postURI, err := util.ParseAtUri(string(mutation.Post.Uri))
+		if err != nil {
+			continue
+		}
+		for _, block := range f.logicblocks {
+			if handler, ok := block.(logicblock.PostDeleteHandler); ok {
+				handler.HandlePostDelete(postURI.Did, postURI.Rkey)
 			}
 		}
 	}
-	return f.store.Delete(did, rkey)
+	return nil
 }
 func (f *feedImpl) DeletePostByDid(did string) (deleted []types.Post, err error) {
 	return f.store.DeleteByDid(did)

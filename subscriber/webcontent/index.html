@@ -243,6 +243,14 @@
     </table>
 
     <fieldset>
+      <legend>オペレーション詳細</legend>
+      <label for="projectionOpsDetailId">ID:</label>
+      <input type="number" id="projectionOpsDetailId" min="1" step="1" placeholder="123" />
+      <button onclick="loadProjectionOpDetail()">Get Detail</button>
+      <pre id="projectionOpsDetailResult" class="scrollable"></pre>
+    </fieldset>
+
+    <fieldset>
       <legend>完了済みオペレーションの一括削除</legend>
       <button class="danger" onclick="purgeCompletedProjectionOps()">Purge Completed</button>
       <pre id="projectionOpsActionResult"></pre>
@@ -282,6 +290,18 @@
     <input type="text" id="postPostCid" placeholder="bafyreib..." />
     <label for="postIndexedAt">IndexedAt:</label>
     <input type="text" id="postPostIndexedAt" placeholder="2023-01-01T00:00:00Z" />
+    <label for="postFeedContext">Feed Context:</label>
+    <input type="text" id="postFeedContext" placeholder="optional context" />
+    <label for="postReasonKind">Reason:</label>
+    <select id="postReasonKind" onchange="togglePostReasonInput()">
+      <option value="">none</option>
+      <option value="repost">repost</option>
+      <option value="pin">pin</option>
+    </select>
+    <span id="postRepostUriContainer" hidden>
+      <label for="postRepostUri">Repost URI:</label>
+      <input type="text" id="postRepostUri" placeholder="at://did:plc:.../app.bsky.feed.repost/..." size="50" />
+    </span>
     <button onclick="addPost()">Add Post</button>
     <pre id="addPostResult"></pre>
 
@@ -631,12 +651,24 @@
           <td>${entry.lastError || ""}</td>
           <td>${entry.updatedAt}</td>
           <td>
+            <button onclick="loadProjectionOpDetail(${entry.id})">Details</button>
             <button onclick="retryProjectionOp(${entry.id})">Retry</button>
             <button class="danger" onclick="deleteProjectionOp(${entry.id})">Delete</button>
           </td>
         `;
         tbody.appendChild(tr);
       });
+    }
+
+    async function loadProjectionOpDetail(id) {
+      if (!apiBase) return alert("API base URL is not set.");
+      const detailId = id || document.getElementById("projectionOpsDetailId").value.trim();
+      if (!detailId || !/^\d+$/.test(String(detailId)) || Number(detailId) <= 0) {
+        return alert("Projection operation ID must be a positive number.");
+      }
+      document.getElementById("projectionOpsDetailId").value = detailId;
+      const res = await fetch(`${apiBase}/api/admin/projection/ops/${encodeURIComponent(detailId)}`);
+      await renderResult("projectionOpsDetailResult", res);
     }
 
     async function retryProjectionOp(id) {
@@ -703,6 +735,11 @@
       await renderResult("postByDidRkeyResult", res);
     }
 
+    function togglePostReasonInput() {
+      const reasonKind = document.getElementById("postReasonKind").value;
+      document.getElementById("postRepostUriContainer").hidden = reasonKind !== "repost";
+    }
+
     async function addPost() {
       if (!apiBase) return alert("API base URL is not set.");
       const feedid = document.getElementById("feedIdInput").value;
@@ -712,15 +749,31 @@
         alert("Please input feed ID, DID and RKEY.");
         return;
       }
+      const body = {
+        cid: document.getElementById("postPostCid").value,
+        indexedAt: document.getElementById("postPostIndexedAt").value || new Date().toISOString()
+      };
+      const feedContext = document.getElementById("postFeedContext").value;
+      if (feedContext) {
+        body.feedContext = feedContext;
+      }
+      const reasonKind = document.getElementById("postReasonKind").value;
+      if (reasonKind === "repost") {
+        const repostURI = document.getElementById("postRepostUri").value.trim();
+        if (!repostURI) {
+          alert("Please input a repost URI.");
+          return;
+        }
+        body.reason = { repost: repostURI };
+      } else if (reasonKind === "pin") {
+        body.reason = { pin: true };
+      }
       const res = await fetch(`${apiBase}/api/feed/${feedid}/post/${did}/${rkey}`, {
         method: "POST",
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          cid: document.getElementById("postPostCid").value,
-          indexedAt: document.getElementById("postPostIndexedAt").value || new Date().toISOString()
-        })
+        body: JSON.stringify(body)
       });
       await renderResult("addPostResult", res);
     }

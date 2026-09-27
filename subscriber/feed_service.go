@@ -13,6 +13,7 @@ import (
 
 	"github.com/nus25/yuge/feed"
 	"github.com/nus25/yuge/feed/config/provider"
+	"github.com/nus25/yuge/feed/logicblock"
 	storepkg "github.com/nus25/yuge/feed/store"
 	"github.com/nus25/yuge/types"
 	"golang.org/x/sync/errgroup"
@@ -30,17 +31,18 @@ type runtimeFeedSnapshot struct {
 }
 
 type FeedService struct {
-	definitionProvider  FeedDefinitionProvider
-	configDir           string
-	dataDir             string
-	storeLoader         storepkg.PostLoader
-	mutationCoordinator PostMutationCoordinator
-	feeds               map[string]FeedInfo
-	logger              *slog.Logger
-	mu                  sync.RWMutex
-	statusMu            sync.Mutex
-	feedOpMu            sync.Mutex
-	feedOpLocks         map[string]*sync.Mutex
+	definitionProvider   FeedDefinitionProvider
+	configDir            string
+	dataDir              string
+	storeLoader          storepkg.PostLoader
+	logicBlockStateStore logicblock.StateRepository
+	mutationCoordinator  PostMutationCoordinator
+	feeds                map[string]FeedInfo
+	logger               *slog.Logger
+	mu                   sync.RWMutex
+	statusMu             sync.Mutex
+	feedOpMu             sync.Mutex
+	feedOpLocks          map[string]*sync.Mutex
 }
 
 func NewFeedService(configDir string, dataDir string, definitionProvider FeedDefinitionProvider, logger *slog.Logger) (*FeedService, error) {
@@ -79,6 +81,12 @@ func (s *FeedService) resolveStoreResources() storepkg.PostLoader {
 	return loader
 }
 
+func (s *FeedService) resolveLogicBlockStateStore() logicblock.StateRepository {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.logicBlockStateStore
+}
+
 func (s *FeedService) getFeedOperationLock(feedID string) *sync.Mutex {
 	s.feedOpMu.Lock()
 	defer s.feedOpMu.Unlock()
@@ -97,6 +105,12 @@ func (s *FeedService) SetStoreLoader(loader storepkg.PostLoader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.storeLoader = loader
+}
+
+func (s *FeedService) SetLogicBlockStateStore(store logicblock.StateRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logicBlockStateStore = store
 }
 
 func (s *FeedService) SetMutationCoordinator(coordinator PostMutationCoordinator) {
@@ -408,12 +422,14 @@ func (s *FeedService) createFeed(ctx context.Context, def FeedDefinition, status
 
 	//feed
 	storeLoader := s.resolveStoreResources()
+	logicBlockStateStore := s.resolveLogicBlockStateStore()
 	initctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	newFeed, err := feed.NewFeedWithOptions(initctx, feedId, feedUri, feed.FeedOptions{
-		Config:      cp.FeedConfig(),
-		StoreLoader: storeLoader,
-		Logger:      s.logger,
+		Config:               cp.FeedConfig(),
+		StoreLoader:          storeLoader,
+		LogicBlockStateStore: logicBlockStateStore,
+		Logger:               s.logger,
 	})
 
 	if err != nil {

@@ -480,6 +480,87 @@ func TestFeedAPI_ListProjectionOps_ReturnsFailedEntries(t *testing.T) {
 	}
 }
 
+func TestFeedAPI_GetProjectionOp_ReturnsFailedEntryDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	db, err := storesqlite.Open(ctx, storesqlite.Options{
+		Path:         filepath.Join(t.TempDir(), "projection-api-detail.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := storesqlite.Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := projectionsqlite.NewOutboxRepository(db)
+	if err := repo.Enqueue(ctx, projectionrepo.EnqueueParams{
+		FeedID:      "feed-detail",
+		FeedURI:     "at://did:plc:test/app.bsky.feed.generator/detail",
+		Target:      "gyoka",
+		Operation:   "add",
+		MutationID:  "m-detail",
+		SubjectKey:  "feed-detail:post-1",
+		OpKey:       "m-detail:add:post-1",
+		PayloadJSON: `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}`,
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	claimed, ok, err := repo.ClaimNextPending(ctx, projectionrepo.ClaimNextPendingParams{Target: "gyoka"})
+	if err != nil {
+		t.Fatalf("ClaimNextPending() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextPending() ok = false, want true")
+	}
+	if err := repo.MarkRetryableFailure(ctx, projectionrepo.MarkRetryableFailureParams{
+		ID:          claimed.ID,
+		LastError:   "temporary failure",
+		NextRetryAt: time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("MarkRetryableFailure() error = %v", err)
+	}
+
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = repo
+	router := gin.New()
+	router.GET("/api/admin/projection/ops/:id", api.GetProjectionOp)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops/"+strconv.FormatInt(claimed.ID, 10), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if response["status"] != "failed" {
+		t.Fatalf("status = %v, want failed", response["status"])
+	}
+	if response["lastError"] != "temporary failure" {
+		t.Fatalf("lastError = %v, want temporary failure", response["lastError"])
+	}
+	if response["payload"] != `{"uri":"at://did:plc:user1/app.bsky.feed.post/post1"}` {
+		t.Fatalf("payload = %v, want original payload JSON", response["payload"])
+	}
+
+	req, _ = http.NewRequest("GET", "/api/admin/projection/ops/999", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing entry status = %d, want %d body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+	}
+}
+
 func TestFeedAPI_RetryProjectionOp_RequeuesDeadEntry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
@@ -865,6 +946,22 @@ func TestFeedAPI_RetryProjectionOp_RejectsInvalidID(t *testing.T) {
 	}
 }
 
+func TestFeedAPI_GetProjectionOp_RejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := NewFeedApiHandler(nil)
+	api.ProjectionOutbox = noopOutboxRepository{}
+	router := gin.Default()
+	router.GET("/api/admin/projection/ops/:id", api.GetProjectionOp)
+
+	req, _ := http.NewRequest("GET", "/api/admin/projection/ops/not-a-number", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
 func TestFeedAPI_PurgeCompletedProjectionOps_RejectsMalformedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	api := NewFeedApiHandler(nil)
@@ -894,6 +991,10 @@ func (noopOutboxRepository) ClearFeed(ctx context.Context, params projectionrepo
 
 func (noopOutboxRepository) ListByStatus(ctx context.Context, params projectionrepo.ListByStatusParams) ([]projectionrepo.Entry, error) {
 	return nil, errors.New("unexpected ListByStatus call")
+}
+
+func (noopOutboxRepository) GetByID(ctx context.Context, id int64) (projectionrepo.Entry, bool, error) {
+	return projectionrepo.Entry{}, false, errors.New("unexpected GetByID call")
 }
 
 func (noopOutboxRepository) CountByStatus(ctx context.Context, params projectionrepo.CountByStatusParams) ([]projectionrepo.StatusCount, error) {
@@ -1222,10 +1323,16 @@ func TestAPIHandler_PostOperationsUseCoordinator(t *testing.T) {
 
 		testDid := "did:plc:test123"
 		testRkey := "testrkey456"
+		feedContext := "matches the requested topic"
+		repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 		postData := map[string]any{
-			"cid":       "bafyreia1",
-			"indexedAt": "2024-01-01T00:00:00Z",
-			"langs":     []string{"en", "ja"},
+			"cid":         "bafyreia1",
+			"indexedAt":   "2024-01-01T00:00:00Z",
+			"langs":       []string{"en", "ja"},
+			"feedContext": feedContext,
+			"reason": map[string]any{
+				"repost": repostURI,
+			},
 		}
 
 		req, _ := http.NewRequest("POST", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
@@ -1246,12 +1353,55 @@ func TestAPIHandler_PostOperationsUseCoordinator(t *testing.T) {
 		if spy.lastAddParams.TrimAt != 24 || spy.lastAddParams.TrimRemain != 20 {
 			t.Fatalf("coordinator trim params = (%d, %d), want (24, 20)", spy.lastAddParams.TrimAt, spy.lastAddParams.TrimRemain)
 		}
+		if spy.lastAddParams.FeedContext == nil || *spy.lastAddParams.FeedContext != feedContext {
+			t.Fatalf("coordinator FeedContext = %v, want %q", spy.lastAddParams.FeedContext, feedContext)
+		}
+		if spy.lastAddParams.Reason == nil || spy.lastAddParams.Reason.Repost == nil || *spy.lastAddParams.Reason.Repost != repostURI {
+			t.Fatalf("coordinator Reason = %+v, want repost %q", spy.lastAddParams.Reason, repostURI)
+		}
 
 		req, _ = http.NewRequest("GET", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
 		recorder = httptest.NewRecorder()
 		router.ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+		var response GetPostByRkeyResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("unmarshal added post response: %v", err)
+		}
+		if response.Post.FeedContext == nil || *response.Post.FeedContext != feedContext {
+			t.Fatalf("stored FeedContext = %v, want %q", response.Post.FeedContext, feedContext)
+		}
+		if response.Post.Reason == nil || response.Post.Reason.Repost == nil || *response.Post.Reason.Repost != repostURI {
+			t.Fatalf("stored Reason = %+v, want repost %q", response.Post.Reason, repostURI)
+		}
+
+		req, _ = http.NewRequest("DELETE", "/api/feed/test-feed/post/"+testDid+"/"+testRkey, nil)
+		recorder = httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("metadata-bearing post delete status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+		var deleteResponse DeletePostByRkeyResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &deleteResponse); err != nil {
+			t.Fatalf("unmarshal deleted post response: %v", err)
+		}
+		if deleteResponse.Deleted.FeedContext == nil || *deleteResponse.Deleted.FeedContext != feedContext {
+			t.Fatalf("deleted FeedContext = %v, want %q", deleteResponse.Deleted.FeedContext, feedContext)
+		}
+	})
+
+	t.Run("add rejects invalid reason", func(t *testing.T) {
+		req, _ := http.NewRequest("POST", "/api/feed/test-feed/post/did:plc:invalid/post-1", createJSONBody(t, map[string]any{
+			"cid":    "bafy-invalid-reason",
+			"reason": map[string]any{},
+		}))
+		req.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("invalid reason status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
 	})
 
@@ -1805,7 +1955,7 @@ func TestAPIHandler_AddAcceptedPost_WaitsForClearFeedOnSameFeed(t *testing.T) {
 
 	addErrCh := make(chan error, 1)
 	go func() {
-		addErrCh <- api.addAcceptedPost(ctx, definition.ID, info.Feed, "did:plc:new", "post2", "cid-new", time.Date(2026, 5, 11, 10, 1, 0, 0, time.UTC), []string{"en"})
+		addErrCh <- api.addAcceptedPost(ctx, definition.ID, info.Feed, "did:plc:new", "post2", "cid-new", time.Date(2026, 5, 11, 10, 1, 0, 0, time.UTC), []string{"en"}, nil, nil)
 	}()
 
 	select {
