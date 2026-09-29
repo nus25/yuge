@@ -155,8 +155,8 @@ github.com/multiformats/go-varint v0.1.0 h1:i2wqFp4sdl3IcIxfAonHQV9qU5OsZ4Ts9IOo
 github.com/multiformats/go-varint v0.1.0/go.mod h1:5KVAVXegtfmNQQm/lCY+ATvDzvJJhSkUlGQV9wgObdI=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/nus25/gyoka-client/go-atproto v0.3.3 h1:07ft00FHB2TPKvpkorwae+u7l6dfxQFIXAn6JWCMvJs=
-github.com/nus25/gyoka-client/go-atproto v0.3.3/go.mod h1:3Ph+n4uStwsT7NwNp9NWe7wPxf+Jnr8YVuVBREZO4qM=
+github.com/nus25/gyoka-client/go-atproto v0.3.4 h1:MqhcgbmHxXxuxdWsi0p/DphFyTwjrCNILHW7AaN3LE0=
+github.com/nus25/gyoka-client/go-atproto v0.3.4/go.mod h1:3Ph+n4uStwsT7NwNp9NWe7wPxf+Jnr8YVuVBREZO4qM=
 github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+1B0VhjKrZUs=
 github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYrxe9dPLANfrWvHYVTgc=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
