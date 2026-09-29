@@ -53,7 +53,7 @@ func (a *fakeGyokaAPI) TrimFeed(context.Context, *gyokaschema.FeedTrimFeed_Input
 	return nil
 }
 
-func (a *fakeGyokaAPI) GetPosts(context.Context, string, string, int64) (*gyokaschema.FeedGetPosts_Output, error) {
+func (a *fakeGyokaAPI) GetPosts(ctx context.Context, feed string, uri string, cid string, indexedAt string, cursor string, limit int64) (*gyokaschema.FeedGetPosts_Output, error) {
 	return nil, nil
 }
 
@@ -136,12 +136,12 @@ func TestGyokaEditor_AddMapsOptionalPostMetadata(t *testing.T) {
 				t.Fatalf("feedContext = %v, want %q", post.FeedContext, feedContext)
 			}
 			if test.wantRepost != "" {
-				if post.Reason == nil || post.Reason.FeedAddPost_SkeletonReasonRepost == nil || post.Reason.FeedAddPost_SkeletonReasonRepost.Repost != test.wantRepost {
+				if post.Reason == nil || post.Reason.FeedDefs_SkeletonReasonRepost == nil || post.Reason.FeedDefs_SkeletonReasonRepost.Repost != test.wantRepost {
 					t.Fatalf("repost reason = %+v, want %q", post.Reason, test.wantRepost)
 				}
 			}
 			if test.wantPin {
-				if post.Reason == nil || post.Reason.FeedAddPost_SkeletonReasonPin == nil {
+				if post.Reason == nil || post.Reason.FeedDefs_SkeletonReasonPin == nil {
 					t.Fatalf("pin reason = %+v, want pin", post.Reason)
 				}
 			}
@@ -184,10 +184,10 @@ func TestGyokaEditor_BatchAddMapsOptionalPostMetadata(t *testing.T) {
 	if posts[0].FeedContext == nil || *posts[0].FeedContext != feedContext {
 		t.Errorf("feedContext = %v, want %q", posts[0].FeedContext, feedContext)
 	}
-	if posts[0].Reason == nil || posts[0].Reason.FeedBatchAddPosts_SkeletonReasonRepost == nil || posts[0].Reason.FeedBatchAddPosts_SkeletonReasonRepost.Repost != repostURI {
+	if posts[0].Reason == nil || posts[0].Reason.FeedDefs_SkeletonReasonRepost == nil || posts[0].Reason.FeedDefs_SkeletonReasonRepost.Repost != repostURI {
 		t.Errorf("repost reason = %+v, want %q", posts[0].Reason, repostURI)
 	}
-	if posts[1].Reason == nil || posts[1].Reason.FeedBatchAddPosts_SkeletonReasonPin == nil {
+	if posts[1].Reason == nil || posts[1].Reason.FeedDefs_SkeletonReasonPin == nil {
 		t.Errorf("pin reason = %+v, want pin", posts[1].Reason)
 	}
 }
