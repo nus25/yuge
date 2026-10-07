@@ -12,7 +12,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.18.4
 	github.com/mattn/go-sqlite3 v1.14.44
-	github.com/nus25/gyoka-client/go-atproto v0.2.0
+	github.com/nus25/gyoka-client/go-atproto v0.3.4
 	github.com/prometheus/client_golang v1.20.5
 	github.com/urfave/cli/v2 v2.27.7
 	go.uber.org/atomic v1.11.0
