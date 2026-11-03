@@ -18,42 +18,35 @@ import (
 )
 
 type fakeGyokaAPI struct {
-	pingErr          error
-	addInput         *gyokaschema.FeedAddPost_Input
-	batchAddInput    *gyokaschema.FeedBatchAddPosts_Input
-	batchRemoveInput *gyokaschema.FeedBatchRemovePosts_Input
+	pingErr     error
+	putInput    *gyokaschema.FeedPutPosts_Input
+	removeInput *gyokaschema.FeedRemovePosts_Input
 }
+
+// check type
+var _ GyokaAPI = (*fakeGyokaAPI)(nil)
 
 func (a *fakeGyokaAPI) Ping(context.Context) error { return a.pingErr }
 
-func (a *fakeGyokaAPI) AddPost(_ context.Context, input *gyokaschema.FeedAddPost_Input) error {
-	a.addInput = input
+func (a *fakeGyokaAPI) PutPosts(_ context.Context, input *gyokaschema.FeedPutPosts_Input) error {
+	a.putInput = input
 	return nil
 }
 
-func (a *fakeGyokaAPI) BatchAddPosts(_ context.Context, input *gyokaschema.FeedBatchAddPosts_Input) error {
-	a.batchAddInput = input
+func (a *fakeGyokaAPI) RemovePosts(_ context.Context, input *gyokaschema.FeedRemovePosts_Input) error {
+	a.removeInput = input
 	return nil
 }
 
-func (a *fakeGyokaAPI) BatchRemovePosts(_ context.Context, input *gyokaschema.FeedBatchRemovePosts_Input) error {
-	a.batchRemoveInput = input
+func (a *fakeGyokaAPI) RemovePostsByAuthor(context.Context, *gyokaschema.FeedRemovePostsByAuthor_Input) error {
 	return nil
 }
 
-func (a *fakeGyokaAPI) RemovePost(context.Context, *gyokaschema.FeedRemovePost_Input) error {
+func (a *fakeGyokaAPI) TrimPosts(context.Context, *gyokaschema.FeedTrimPosts_Input) error {
 	return nil
 }
 
-func (a *fakeGyokaAPI) RemovePostByAuthor(context.Context, *gyokaschema.FeedRemovePostByAuthor_Input) error {
-	return nil
-}
-
-func (a *fakeGyokaAPI) TrimFeed(context.Context, *gyokaschema.FeedTrimFeed_Input) error {
-	return nil
-}
-
-func (a *fakeGyokaAPI) GetPosts(ctx context.Context, feed string, uri string, cid string, indexedAt string, cursor string, limit int64) (*gyokaschema.FeedGetPosts_Output, error) {
+func (a *fakeGyokaAPI) ListPosts(ctx context.Context, feed string, postUri string, author string, cursor string, limit int64) (*gyokaschema.FeedListPosts_Output, error) {
 	return nil, nil
 }
 
@@ -73,28 +66,24 @@ func TestGyokaEditor_AddMapsATProtoLexiconInput(t *testing.T) {
 		t.Fatalf("Add() error = %v", err)
 	}
 
-	if api.addInput == nil {
-		t.Fatal("AddPost() input is nil")
+	if api.putInput == nil {
+		t.Fatal("PutPosts() input is nil")
 	}
-	if api.addInput.Feed != "at://did:plc:feed/app.bsky.feed.generator/sample" {
-		t.Errorf("feed = %q", api.addInput.Feed)
+	if api.putInput.Feed != "at://did:plc:feed/app.bsky.feed.generator/sample" {
+		t.Errorf("feed = %q", api.putInput.Feed)
 	}
-	if api.addInput.Post.Uri != "at://did:plc:author/app.bsky.feed.post/post-1" {
-		t.Errorf("post URI = %q", api.addInput.Post.Uri)
+	if api.putInput.Posts[0].Uri != "at://did:plc:author/app.bsky.feed.post/post-1" {
+		t.Errorf("post URI = %q", api.putInput.Posts[0].Uri)
 	}
-	if api.addInput.Post.IndexedAt == nil || *api.addInput.Post.IndexedAt != indexedAt.Format(time.RFC3339Nano) {
-		t.Errorf("indexedAt = %v, want %s", api.addInput.Post.IndexedAt, indexedAt.Format(time.RFC3339Nano))
+	if api.putInput.Posts[0].IndexedAt == nil || *api.putInput.Posts[0].IndexedAt != indexedAt.Format(time.RFC3339Nano) {
+		t.Errorf("indexedAt = %v, want %s", api.putInput.Posts[0].IndexedAt, indexedAt.Format(time.RFC3339Nano))
 	}
-	if api.addInput.Post.FeedContext != nil {
-		t.Errorf("feedContext = %v, want nil", api.addInput.Post.FeedContext)
-	}
-	if api.addInput.Post.Reason != nil {
-		t.Errorf("reason = %v, want nil", api.addInput.Post.Reason)
+	if api.putInput.Posts[0].Reason != nil {
+		t.Errorf("reason = %v, want nil", api.putInput.Posts[0].Reason)
 	}
 }
 
 func TestGyokaEditor_AddMapsOptionalPostMetadata(t *testing.T) {
-	feedContext := "recommended because it matches the topic"
 	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 	tests := []struct {
 		name       string
@@ -120,21 +109,17 @@ func TestGyokaEditor_AddMapsOptionalPostMetadata(t *testing.T) {
 			editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
 
 			if err := editor.Add(PostParams{
-				FeedUri:     "at://did:plc:feed/app.bsky.feed.generator/sample",
-				Did:         "did:plc:author",
-				Rkey:        "post-1",
-				Cid:         "bafy-test",
-				IndexedAt:   time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
-				FeedContext: &feedContext,
-				Reason:      test.reason,
+				FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:       "did:plc:author",
+				Rkey:      "post-1",
+				Cid:       "bafy-test",
+				IndexedAt: time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+				Reason:    test.reason,
 			}); err != nil {
 				t.Fatalf("Add() error = %v", err)
 			}
 
-			post := api.addInput.Post
-			if post.FeedContext == nil || *post.FeedContext != feedContext {
-				t.Fatalf("feedContext = %v, want %q", post.FeedContext, feedContext)
-			}
+			post := api.putInput.Posts[0]
 			if test.wantRepost != "" {
 				if post.Reason == nil || post.Reason.FeedDefs_SkeletonReasonRepost == nil || post.Reason.FeedDefs_SkeletonReasonRepost.Repost != test.wantRepost {
 					t.Fatalf("repost reason = %+v, want %q", post.Reason, test.wantRepost)
@@ -150,40 +135,38 @@ func TestGyokaEditor_AddMapsOptionalPostMetadata(t *testing.T) {
 }
 
 func TestGyokaEditor_BatchAddMapsOptionalPostMetadata(t *testing.T) {
-	feedContext := "recommended because it matches the topic"
 	repostURI := "at://did:plc:reposter/app.bsky.feed.repost/repost-1"
 	api := &fakeGyokaAPI{}
 	editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
 
-	if err := editor.BatchAdd(BatchPostParams{Entries: []PostParams{
-		{
-			FeedUri:     "at://did:plc:feed/app.bsky.feed.generator/sample",
-			Did:         "did:plc:author1",
-			Rkey:        "post-1",
-			Cid:         "bafy-test-1",
-			IndexedAt:   time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
-			FeedContext: &feedContext,
-			Reason:      &PostReason{Repost: &repostURI},
-		},
-		{
-			FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
-			Did:       "did:plc:author2",
-			Rkey:      "post-2",
-			Cid:       "bafy-test-2",
-			IndexedAt: time.Date(2026, 8, 22, 12, 31, 0, 0, time.UTC),
-			Reason:    &PostReason{Pin: true},
-		},
-	}}); err != nil {
+	if err := editor.BatchAdd(BatchPostParams{
+		FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+		Posts: []PostParams{
+			{
+				FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:       "did:plc:author1",
+				Rkey:      "post-1",
+				Cid:       "bafy-test-1",
+				IndexedAt: time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+				Reason:    &PostReason{Repost: &repostURI},
+			},
+			{
+				FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:       "did:plc:author2",
+				Rkey:      "post-2",
+				Cid:       "bafy-test-2",
+				IndexedAt: time.Date(2026, 8, 22, 12, 31, 0, 0, time.UTC),
+				Reason:    &PostReason{Pin: true},
+			},
+		}}); err != nil {
 		t.Fatalf("BatchAdd() error = %v", err)
 	}
 
-	if api.batchAddInput == nil || len(api.batchAddInput.Entries) != 1 || len(api.batchAddInput.Entries[0].Posts) != 2 {
-		t.Fatalf("BatchAddPosts() input = %+v", api.batchAddInput)
+	if api.putInput == nil || len(api.putInput.Posts) != 2 {
+		t.Fatalf("BatchAddPosts() input = %+v", api.putInput)
 	}
-	posts := api.batchAddInput.Entries[0].Posts
-	if posts[0].FeedContext == nil || *posts[0].FeedContext != feedContext {
-		t.Errorf("feedContext = %v, want %q", posts[0].FeedContext, feedContext)
-	}
+	posts := api.putInput.Posts
+
 	if posts[0].Reason == nil || posts[0].Reason.FeedDefs_SkeletonReasonRepost == nil || posts[0].Reason.FeedDefs_SkeletonReasonRepost.Repost != repostURI {
 		t.Errorf("repost reason = %+v, want %q", posts[0].Reason, repostURI)
 	}
@@ -215,8 +198,8 @@ func TestGyokaEditor_AddRejectsInvalidPostReason(t *testing.T) {
 			if !errors.Is(err, ErrInvalidPostReason) {
 				t.Fatalf("Add() error = %v, want ErrInvalidPostReason", err)
 			}
-			if api.addInput != nil {
-				t.Fatalf("AddPost() input = %+v, want nil", api.addInput)
+			if api.putInput != nil {
+				t.Fatalf("AddPost() input = %+v, want nil", api.putInput)
 			}
 		})
 	}
@@ -302,7 +285,9 @@ func TestClassifyGyokaError(t *testing.T) {
 
 func TestGyokaEditor_BatchAddRejectsOversizedBatch(t *testing.T) {
 	entries := make([]PostParams, maxBatchSize+1)
-	if err := newGyokaEditor(&fakeGyokaAPI{}, nil).BatchAdd(BatchPostParams{Entries: entries}); err == nil {
+	if err := newGyokaEditor(&fakeGyokaAPI{}, nil).BatchAdd(BatchPostParams{
+		FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+		Posts:   entries}); err == nil {
 		t.Fatal("BatchAdd() error = nil, want batch size error")
 	}
 }
@@ -311,38 +296,36 @@ func TestGyokaEditor_BatchRemoveMapsATProtoLexiconInput(t *testing.T) {
 	api := &fakeGyokaAPI{}
 	editor := newGyokaEditor(api, nil, WithMinRequestInterval(0))
 
-	if err := editor.BatchRemove(BatchDeleteParams{Entries: []DeleteParams{
-		{
-			FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
-			Did:     "did:plc:author1",
-			Rkey:    "post-1",
-		},
-		{
-			FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
-			Did:     "did:plc:author2",
-			Rkey:    "post-2",
-		},
-	}}); err != nil {
+	if err := editor.BatchRemove(BatchDeleteParams{
+		FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+		Uris: []DeleteParams{
+			{
+				FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:     "did:plc:author1",
+				Rkey:    "post-1",
+			},
+			{
+				FeedUri: "at://did:plc:feed/app.bsky.feed.generator/sample",
+				Did:     "did:plc:author2",
+				Rkey:    "post-2",
+			},
+		}}); err != nil {
 		t.Fatalf("BatchRemove() error = %v", err)
 	}
 
-	if api.batchRemoveInput == nil {
+	if api.removeInput == nil {
 		t.Fatal("BatchRemovePosts() input is nil")
 	}
-	if len(api.batchRemoveInput.Entries) != 1 {
-		t.Fatalf("entries len = %d, want 1", len(api.batchRemoveInput.Entries))
+	if api.removeInput.Feed != "at://did:plc:feed/app.bsky.feed.generator/sample" {
+		t.Errorf("feed = %q", api.removeInput.Feed)
 	}
-	entry := api.batchRemoveInput.Entries[0]
-	if entry.Feed != "at://did:plc:feed/app.bsky.feed.generator/sample" {
-		t.Errorf("feed = %q", entry.Feed)
+	if len(api.removeInput.Uris) != 2 {
+		t.Fatalf("posts len = %d, want 2", len(api.removeInput.Uris))
 	}
-	if len(entry.Posts) != 2 {
-		t.Fatalf("posts len = %d, want 2", len(entry.Posts))
+	if api.removeInput.Uris[0] != "at://did:plc:author1/app.bsky.feed.post/post-1" {
+		t.Errorf("first post URI = %q", api.removeInput.Uris[0])
 	}
-	if entry.Posts[0].Uri != "at://did:plc:author1/app.bsky.feed.post/post-1" {
-		t.Errorf("first post URI = %q", entry.Posts[0].Uri)
-	}
-	if entry.Posts[1].Uri != "at://did:plc:author2/app.bsky.feed.post/post-2" {
-		t.Errorf("second post URI = %q", entry.Posts[1].Uri)
+	if api.removeInput.Uris[1] != "at://did:plc:author2/app.bsky.feed.post/post-2" {
+		t.Errorf("second post URI = %q", api.removeInput.Uris[1])
 	}
 }

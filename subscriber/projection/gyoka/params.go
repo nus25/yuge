@@ -21,20 +21,19 @@ type SaveParams struct {
 }
 
 type PostParams struct {
-	FeedUri     types.FeedUri
-	Did         string
-	Rkey        string
-	Cid         string
-	IndexedAt   time.Time
-	Langs       []string
-	FeedContext *string
-	Reason      *PostReason
+	FeedUri   types.FeedUri
+	Did       string
+	Rkey      string
+	Cid       string
+	IndexedAt time.Time
+	Langs     []string
+	Reason    *PostReason
 }
 
 type PostReason = types.PostReason
-
 type BatchPostParams struct {
-	Entries []PostParams
+	FeedUri types.FeedUri
+	Posts   []PostParams
 }
 
 type DeleteParams struct {
@@ -44,7 +43,8 @@ type DeleteParams struct {
 }
 
 type BatchDeleteParams struct {
-	Entries []DeleteParams
+	FeedUri types.FeedUri
+	Uris    []DeleteParams
 }
 
 type DeleteByDidParams struct {

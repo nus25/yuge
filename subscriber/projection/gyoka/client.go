@@ -45,15 +45,13 @@ type ClientConfig struct {
 	PrivateKey   atcrypto.PrivateKey
 }
 
-type gyokaAPI interface {
+type GyokaAPI interface {
 	Ping(context.Context) error
-	AddPost(context.Context, *gyokaschema.FeedAddPost_Input) error
-	BatchAddPosts(context.Context, *gyokaschema.FeedBatchAddPosts_Input) error
-	BatchRemovePosts(context.Context, *gyokaschema.FeedBatchRemovePosts_Input) error
-	RemovePost(context.Context, *gyokaschema.FeedRemovePost_Input) error
-	RemovePostByAuthor(context.Context, *gyokaschema.FeedRemovePostByAuthor_Input) error
-	TrimFeed(context.Context, *gyokaschema.FeedTrimFeed_Input) error
-	GetPosts(ctx context.Context, feed string, uri string, cid string, indexedAt string, cursor string, limit int64) (*gyokaschema.FeedGetPosts_Output, error)
+	PutPosts(context.Context, *gyokaschema.FeedPutPosts_Input) error
+	RemovePosts(context.Context, *gyokaschema.FeedRemovePosts_Input) error
+	RemovePostsByAuthor(context.Context, *gyokaschema.FeedRemovePostsByAuthor_Input) error
+	TrimPosts(context.Context, *gyokaschema.FeedTrimPosts_Input) error
+	ListPosts(ctx context.Context, feed string, postUri string, author string, cursor string, limit int64) (*gyokaschema.FeedListPosts_Output, error)
 }
 
 type atprotoGyokaAPI struct {
@@ -65,38 +63,28 @@ func (a *atprotoGyokaAPI) Ping(ctx context.Context) error {
 	return err
 }
 
-func (a *atprotoGyokaAPI) AddPost(ctx context.Context, input *gyokaschema.FeedAddPost_Input) error {
-	_, err := a.client.AddPost(ctx, input)
+func (a *atprotoGyokaAPI) PutPosts(ctx context.Context, input *gyokaschema.FeedPutPosts_Input) error {
+	_, err := a.client.PutPosts(ctx, input)
 	return err
 }
 
-func (a *atprotoGyokaAPI) BatchAddPosts(ctx context.Context, input *gyokaschema.FeedBatchAddPosts_Input) error {
-	_, err := a.client.BatchAddPosts(ctx, input)
+func (a *atprotoGyokaAPI) RemovePosts(ctx context.Context, input *gyokaschema.FeedRemovePosts_Input) error {
+	_, err := a.client.RemovePosts(ctx, input)
 	return err
 }
 
-func (a *atprotoGyokaAPI) BatchRemovePosts(ctx context.Context, input *gyokaschema.FeedBatchRemovePosts_Input) error {
-	_, err := a.client.BatchRemovePosts(ctx, input)
+func (a *atprotoGyokaAPI) RemovePostsByAuthor(ctx context.Context, input *gyokaschema.FeedRemovePostsByAuthor_Input) error {
+	_, err := a.client.RemovePostsByAuthor(ctx, input)
 	return err
 }
 
-func (a *atprotoGyokaAPI) RemovePost(ctx context.Context, input *gyokaschema.FeedRemovePost_Input) error {
-	_, err := a.client.RemovePost(ctx, input)
+func (a *atprotoGyokaAPI) TrimPosts(ctx context.Context, input *gyokaschema.FeedTrimPosts_Input) error {
+	_, err := a.client.TrimPosts(ctx, input)
 	return err
 }
 
-func (a *atprotoGyokaAPI) RemovePostByAuthor(ctx context.Context, input *gyokaschema.FeedRemovePostByAuthor_Input) error {
-	_, err := a.client.RemovePostByAuthor(ctx, input)
-	return err
-}
-
-func (a *atprotoGyokaAPI) TrimFeed(ctx context.Context, input *gyokaschema.FeedTrimFeed_Input) error {
-	_, err := a.client.TrimFeed(ctx, input)
-	return err
-}
-
-func (a *atprotoGyokaAPI) GetPosts(ctx context.Context, feed, uri, cid, indexedAt, cursor string, limit int64) (*gyokaschema.FeedGetPosts_Output, error) {
-	return a.client.GetPosts(ctx, feed, uri, cid, indexedAt, cursor, limit)
+func (a *atprotoGyokaAPI) ListPosts(ctx context.Context, feed string, postUri string, author string, cursor string, limit int64) (*gyokaschema.FeedListPosts_Output, error) {
+	return a.client.ListPosts(ctx, feed, postUri, author, cursor, limit)
 }
 
 type feedRequest struct {
@@ -110,7 +98,7 @@ type feedRequest struct {
 }
 
 type GyokaEditor struct {
-	client            gyokaAPI
+	client            GyokaAPI
 	option            *ClientOption
 	logger            *slog.Logger
 	requestScheduleMu sync.Mutex
@@ -161,7 +149,7 @@ func newATProtoClient(ctx context.Context, config ClientConfig) (*client.Client,
 	})
 }
 
-func newGyokaEditor(api gyokaAPI, logger *slog.Logger, opts ...ClientOptionFunc) *GyokaEditor {
+func newGyokaEditor(api GyokaAPI, logger *slog.Logger, opts ...ClientOptionFunc) *GyokaEditor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -247,39 +235,40 @@ func (e *GyokaEditor) waitForRequestSlot(ctx context.Context) error {
 func (e *GyokaEditor) executeRequest(ctx context.Context, req *feedRequest) error {
 	switch req.operation {
 	case "add":
-		return e.client.AddPost(ctx, addPostInput(req.addParams))
+		return e.client.PutPosts(ctx, addPostInput(req.addParams))
 	case "batchAdd":
-		return e.client.BatchAddPosts(ctx, batchAddPostsInput(req.batchAddParams))
+		return e.client.PutPosts(ctx, batchAddPostsInput(req.batchAddParams))
 	case "batchRemove":
-		return e.client.BatchRemovePosts(ctx, batchRemovePostsInput(req.batchDeleteParams))
+		return e.client.RemovePosts(ctx, batchRemovePostsInput(req.batchDeleteParams))
 	case "delete":
 		params := req.deleteParams
-		return e.client.RemovePost(ctx, &gyokaschema.FeedRemovePost_Input{
+		return e.client.RemovePosts(ctx, &gyokaschema.FeedRemovePosts_Input{
 			Feed: string(params.FeedUri),
-			Post: &gyokaschema.FeedRemovePost_PostRef{Uri: postURI(params.Did, params.Rkey)},
+			Uris: []string{postURI(params.Did, params.Rkey)},
 		})
 	case "deleteByDid":
 		params := req.deleteByDidParams
-		return e.client.RemovePostByAuthor(ctx, &gyokaschema.FeedRemovePostByAuthor_Input{Feed: string(params.FeedUri), Author: params.Did})
+		return e.client.RemovePostsByAuthor(ctx, &gyokaschema.FeedRemovePostsByAuthor_Input{Feed: string(params.FeedUri), Author: params.Did})
 	case "trim":
 		params := req.trimParams
-		return e.client.TrimFeed(ctx, &gyokaschema.FeedTrimFeed_Input{Feed: string(params.FeedUri), Remain: int64(params.Count)})
+		return e.client.TrimPosts(ctx, &gyokaschema.FeedTrimPosts_Input{Feed: string(params.FeedUri), Remain: int64(params.Count)})
 	default:
 		return fmt.Errorf("unknown operation: %s", req.operation)
 	}
 }
 
-func addPostInput(params PostParams) *gyokaschema.FeedAddPost_Input {
+func addPostInput(params PostParams) *gyokaschema.FeedPutPosts_Input {
 	indexedAt := params.IndexedAt.UTC().Format(time.RFC3339Nano)
-	return &gyokaschema.FeedAddPost_Input{
+	return &gyokaschema.FeedPutPosts_Input{
 		Feed: string(params.FeedUri),
-		Post: &gyokaschema.FeedDefs_PostInput{
-			Cid:         params.Cid,
-			FeedContext: params.FeedContext,
-			IndexedAt:   &indexedAt,
-			Languages:   params.Langs,
-			Reason:      addPostReason(params.Reason),
-			Uri:         postURI(params.Did, params.Rkey),
+		Posts: []*gyokaschema.FeedDefs_PostInput{
+			{
+				Cid:       params.Cid,
+				IndexedAt: &indexedAt,
+				Languages: params.Langs,
+				Reason:    addPostReason(params.Reason),
+				Uri:       postURI(params.Did, params.Rkey),
+			},
 		},
 	}
 }
@@ -298,38 +287,39 @@ func addPostReason(reason *PostReason) *gyokaschema.FeedDefs_PostInput_Reason {
 	}
 }
 
-func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedBatchAddPosts_Input {
-	postsByFeed := make(map[string][]*gyokaschema.FeedDefs_PostInput)
-	for _, entry := range params.Entries {
+func batchAddPostsInput(params BatchPostParams) *gyokaschema.FeedPutPosts_Input {
+	if len(params.Posts) == 0 {
+		return nil
+	}
+	posts := make([]*gyokaschema.FeedDefs_PostInput, 0, len(params.Posts))
+	for _, entry := range params.Posts {
 		indexedAt := entry.IndexedAt.UTC().Format(time.RFC3339Nano)
-		postsByFeed[string(entry.FeedUri)] = append(postsByFeed[string(entry.FeedUri)], &gyokaschema.FeedDefs_PostInput{
-			Cid:         entry.Cid,
-			FeedContext: entry.FeedContext,
-			IndexedAt:   &indexedAt,
-			Languages:   entry.Langs,
-			Reason:      addPostReason(entry.Reason),
-			Uri:         postURI(entry.Did, entry.Rkey),
+		posts = append(posts, &gyokaschema.FeedDefs_PostInput{
+			Cid:       entry.Cid,
+			IndexedAt: &indexedAt,
+			Languages: entry.Langs,
+			Reason:    addPostReason(entry.Reason),
+			Uri:       postURI(entry.Did, entry.Rkey),
 		})
 	}
-	entries := make([]*gyokaschema.FeedBatchAddPosts_EntryInput, 0, len(postsByFeed))
-	for feed, posts := range postsByFeed {
-		entries = append(entries, &gyokaschema.FeedBatchAddPosts_EntryInput{Feed: feed, Posts: posts})
+	return &gyokaschema.FeedPutPosts_Input{
+		Feed:  string(params.FeedUri),
+		Posts: posts,
 	}
-	return &gyokaschema.FeedBatchAddPosts_Input{Entries: entries}
 }
 
-func batchRemovePostsInput(params BatchDeleteParams) *gyokaschema.FeedBatchRemovePosts_Input {
-	postsByFeed := make(map[string][]*gyokaschema.FeedBatchRemovePosts_PostInput)
-	for _, entry := range params.Entries {
-		postsByFeed[string(entry.FeedUri)] = append(postsByFeed[string(entry.FeedUri)], &gyokaschema.FeedBatchRemovePosts_PostInput{
-			Uri: postURI(entry.Did, entry.Rkey),
-		})
+func batchRemovePostsInput(params BatchDeleteParams) *gyokaschema.FeedRemovePosts_Input {
+	if len(params.Uris) == 0 {
+		return nil
 	}
-	entries := make([]*gyokaschema.FeedBatchRemovePosts_EntryInput, 0, len(postsByFeed))
-	for feed, posts := range postsByFeed {
-		entries = append(entries, &gyokaschema.FeedBatchRemovePosts_EntryInput{Feed: feed, Posts: posts})
+	uris := make([]string, 0, len(params.Uris))
+	for _, entry := range params.Uris {
+		uris = append(uris, postURI(entry.Did, entry.Rkey))
 	}
-	return &gyokaschema.FeedBatchRemovePosts_Input{Entries: entries}
+	return &gyokaschema.FeedRemovePosts_Input{
+		Feed: string(params.FeedUri),
+		Uris: uris,
+	}
 }
 
 func postURI(did, rkey string) string {
@@ -358,10 +348,10 @@ func isNonRetryableError(err error) bool {
 }
 
 func (e *GyokaEditor) Load(ctx context.Context, params LoadParams) ([]types.Post, error) {
-	var output *gyokaschema.FeedGetPosts_Output
+	var output *gyokaschema.FeedListPosts_Output
 	err := e.retry(ctx, "get posts", func(ctx context.Context) error {
 		var err error
-		output, err = e.client.GetPosts(ctx, string(params.FeedUri), "", "", "", "", int64(params.Limit))
+		output, err = e.client.ListPosts(ctx, string(params.FeedUri), "", "", "", int64(params.Limit))
 		return err
 	})
 	if err != nil {
@@ -385,13 +375,22 @@ func (e *GyokaEditor) Add(params PostParams) error {
 }
 
 func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
-	if len(params.Entries) == 0 {
+	if err := params.FeedUri.Validate(); err != nil {
+		return fmt.Errorf("invalid feed uri: %w", err)
+	}
+	if len(params.Posts) == 0 {
 		return nil
 	}
-	if len(params.Entries) > maxBatchSize {
-		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Entries), maxBatchSize)
+	if len(params.Posts) > maxBatchSize {
+		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Posts), maxBatchSize)
 	}
-	for _, entry := range params.Entries {
+	feedURI := params.FeedUri
+	for _, entry := range params.Posts {
+		if entry.FeedUri != feedURI {
+			return fmt.Errorf("all feed uris must be the same")
+		}
+	}
+	for _, entry := range params.Posts {
 		if err := entry.FeedUri.Validate(); err != nil {
 			return fmt.Errorf("invalid feed uri: %w", err)
 		}
@@ -403,13 +402,22 @@ func (e *GyokaEditor) BatchAdd(params BatchPostParams) error {
 }
 
 func (e *GyokaEditor) BatchRemove(params BatchDeleteParams) error {
-	if len(params.Entries) == 0 {
+	if err := params.FeedUri.Validate(); err != nil {
+		return fmt.Errorf("invalid feed uri: %w", err)
+	}
+	if len(params.Uris) == 0 {
 		return nil
 	}
-	if len(params.Entries) > maxBatchSize {
-		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Entries), maxBatchSize)
+	if len(params.Uris) > maxBatchSize {
+		return fmt.Errorf("batch size exceeds limit: %d > %d", len(params.Uris), maxBatchSize)
 	}
-	for _, entry := range params.Entries {
+	feedURI := params.FeedUri
+	for _, entry := range params.Uris {
+		if entry.FeedUri != feedURI {
+			return fmt.Errorf("all feed uris must be the same")
+		}
+	}
+	for _, entry := range params.Uris {
 		if err := entry.FeedUri.Validate(); err != nil {
 			return fmt.Errorf("invalid feed uri: %w", err)
 		}
