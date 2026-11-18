@@ -63,14 +63,13 @@ func (p *GyokaProjector) Project(ctx context.Context, entry projectionrepo.Entry
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
 		if err := p.mutator.Add(gyoka.PostParams{
-			FeedUri:     payload.FeedURI,
-			Did:         parsedURI.Did,
-			Rkey:        parsedURI.Rkey,
-			Cid:         payload.Post.Cid,
-			IndexedAt:   indexedAt,
-			Langs:       payload.Post.Langs,
-			FeedContext: payload.Post.FeedContext,
-			Reason:      payload.Post.Reason,
+			FeedUri:   payload.FeedURI,
+			Did:       parsedURI.Did,
+			Rkey:      parsedURI.Rkey,
+			Cid:       payload.Post.Cid,
+			IndexedAt: indexedAt,
+			Langs:     payload.Post.Langs,
+			Reason:    payload.Post.Reason,
 		}); err != nil {
 			var nonRetryableErr *gyoka.NonRetryableError
 			if errors.As(err, &nonRetryableErr) {
@@ -126,8 +125,10 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 	}
 
 	operation := entries[0].Operation
-	batchAddEntries := make([]gyoka.PostParams, 0, len(entries))
-	batchDeleteEntries := make([]gyoka.DeleteParams, 0, len(entries))
+	feedOrder := make([]types.FeedUri, 0, len(entries))
+	seenFeeds := make(map[types.FeedUri]struct{})
+	batchAddByFeed := make(map[types.FeedUri][]gyoka.PostParams)
+	batchDeleteByFeed := make(map[types.FeedUri][]gyoka.DeleteParams)
 	for _, entry := range entries {
 		if entry.Operation != operation || (operation != "add" && operation != "delete") {
 			return markNonRetryableProjection(fmt.Errorf("%w: %s", ErrUnsupportedProjectionOperation, entry.Operation))
@@ -140,8 +141,12 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected post uri: %w", err))
 		}
+		if _, ok := seenFeeds[payload.FeedURI]; !ok {
+			seenFeeds[payload.FeedURI] = struct{}{}
+			feedOrder = append(feedOrder, payload.FeedURI)
+		}
 		if operation == "delete" {
-			batchDeleteEntries = append(batchDeleteEntries, gyoka.DeleteParams{
+			batchDeleteByFeed[payload.FeedURI] = append(batchDeleteByFeed[payload.FeedURI], gyoka.DeleteParams{
 				FeedUri: payload.FeedURI,
 				Did:     parsedURI.Did,
 				Rkey:    parsedURI.Rkey,
@@ -152,25 +157,28 @@ func (p *GyokaProjector) ProjectBatch(ctx context.Context, entries []projectionr
 		if err != nil {
 			return markNonRetryableProjection(fmt.Errorf("parse projected indexed_at: %w", err))
 		}
-		batchAddEntries = append(batchAddEntries, gyoka.PostParams{
-			FeedUri:     payload.FeedURI,
-			Did:         parsedURI.Did,
-			Rkey:        parsedURI.Rkey,
-			Cid:         payload.Post.Cid,
-			IndexedAt:   indexedAt,
-			Langs:       payload.Post.Langs,
-			FeedContext: payload.Post.FeedContext,
-			Reason:      payload.Post.Reason,
+		batchAddByFeed[payload.FeedURI] = append(batchAddByFeed[payload.FeedURI], gyoka.PostParams{
+			FeedUri:   payload.FeedURI,
+			Did:       parsedURI.Did,
+			Rkey:      parsedURI.Rkey,
+			Cid:       payload.Post.Cid,
+			IndexedAt: indexedAt,
+			Langs:     payload.Post.Langs,
+			Reason:    payload.Post.Reason,
 		})
 	}
 	if operation == "delete" {
-		if err := p.mutator.BatchRemove(gyoka.BatchDeleteParams{Entries: batchDeleteEntries}); err != nil {
-			return fmt.Errorf("project delete batch: %w", err)
+		for _, feedURI := range feedOrder {
+			if err := p.mutator.BatchRemove(gyoka.BatchDeleteParams{FeedUri: feedURI, Uris: batchDeleteByFeed[feedURI]}); err != nil {
+				return fmt.Errorf("project delete batch: %w", err)
+			}
 		}
 		return nil
 	}
-	if err := p.mutator.BatchAdd(gyoka.BatchPostParams{Entries: batchAddEntries}); err != nil {
-		return fmt.Errorf("project add batch: %w", err)
+	for _, feedURI := range feedOrder {
+		if err := p.mutator.BatchAdd(gyoka.BatchPostParams{FeedUri: feedURI, Posts: batchAddByFeed[feedURI]}); err != nil {
+			return fmt.Errorf("project add batch: %w", err)
+		}
 	}
 	return nil
 }
