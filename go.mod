@@ -1,6 +1,6 @@
 module github.com/nus25/yuge
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/bluesky-social/indigo v0.0.0-20261103021909-14edde8f7db9
