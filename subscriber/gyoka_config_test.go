@@ -84,19 +84,52 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		},
 		{
 			name: "private key authentication",
-			configBody: "directHost: http://localhost:3000\n" +
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n",
 			privateKey:     "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
-			wantHost:       "http://localhost:3000",
+			wantHost:       "https://localhost:3000",
 			wantAudience:   "did:web:gyoka.example.com#gyoka_editor",
 			wantUserID:     "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
 			wantAuthMode:   gyokaAuthInterService,
 			wantIntervalMS: defaultGyokaMinRequestIntervalMS,
 		},
 		{
-			name: "private key authentication resolves custom headers from environment",
+			name: "private key authentication rejects HTTP by default",
 			configBody: "directHost: http://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n  X-Test-Secret: test-secret\n",
+			privateKey: "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantErr:    ErrGyokaDirectHostInvalid,
+		},
+		{
+			name: "private key authentication rejects HTTP when explicitly disabled",
+			configBody: "directHost: http://localhost:3000\n" +
+				"allowInsecureHttp: false\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n",
+			privateKey: "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantErr:    ErrGyokaDirectHostInvalid,
+		},
+		{
+			name: "private key authentication allows HTTP when explicitly enabled",
+			configBody: "directHost: http://localhost:3000\n" +
+				"allowInsecureHttp: true\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n  X-Test-Secret: test-secret\n",
+			privateKey:     "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantHost:       "http://localhost:3000",
+			wantAudience:   "did:web:gyoka.example.com#gyoka_editor",
+			wantUserID:     "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+			wantHeaders:    map[string]string{"X-Test-Secret": "test-secret"},
+			wantAuthMode:   gyokaAuthInterService,
+			wantIntervalMS: defaultGyokaMinRequestIntervalMS,
+		},
+		{
+			name: "private key authentication resolves custom headers from environment",
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
 				"headers:\n" +
@@ -107,7 +140,7 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 				"YUGE_TEST_GYOKA_ACCESS_SECRET": "gyoka-test-access-secret-2c57",
 			},
 			privateKey:   "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
-			wantHost:     "http://localhost:3000",
+			wantHost:     "https://localhost:3000",
 			wantAudience: "did:web:gyoka.example.com#gyoka_editor",
 			wantUserID:   "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
 			wantHeaders: map[string]string{
@@ -119,7 +152,7 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		},
 		{
 			name: "custom header requires environment variable",
-			configBody: "directHost: http://localhost:3000\n" +
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
 				"headers:\n" +
@@ -139,7 +172,7 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		},
 		{
 			name: "authorization header is reserved",
-			configBody: "directHost: http://localhost:3000\n" +
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
 				"headers:\n" +
@@ -149,7 +182,7 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		},
 		{
 			name: "invalid custom header name",
-			configBody: "directHost: http://localhost:3000\n" +
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
 				"headers:\n" +
@@ -159,12 +192,12 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 		},
 		{
 			name: "private key takes precedence over app password",
-			configBody: "directHost: http://localhost:3000\n" +
+			configBody: "directHost: https://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
 				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n",
 			appPassword:    "app-password",
 			privateKey:     "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
-			wantHost:       "http://localhost:3000",
+			wantHost:       "https://localhost:3000",
 			wantAudience:   "did:web:gyoka.example.com#gyoka_editor",
 			wantUserID:     "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
 			wantAuthMode:   gyokaAuthInterService,
