@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -30,12 +31,14 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 	tests := []struct {
 		name           string
 		configBody     string
+		env            map[string]string
 		appPassword    string
 		privateKey     string
 		wantErr        error
 		wantHost       string
 		wantAudience   string
 		wantUserID     string
+		wantHeaders    map[string]string
 		wantAuthMode   gyokaAuthMode
 		wantIntervalMS int
 	}{
@@ -92,6 +95,69 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 			wantIntervalMS: defaultGyokaMinRequestIntervalMS,
 		},
 		{
+			name: "private key authentication resolves custom headers from environment",
+			configBody: "directHost: http://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n" +
+				"  CF-Access-Client-Id: ${YUGE_TEST_GYOKA_ACCESS_ID}\n" +
+				"  CF-Access-Client-Secret: ${YUGE_TEST_GYOKA_ACCESS_SECRET}\n",
+			env: map[string]string{
+				"YUGE_TEST_GYOKA_ACCESS_ID":     "gyoka-test-access-id-8041",
+				"YUGE_TEST_GYOKA_ACCESS_SECRET": "gyoka-test-access-secret-2c57",
+			},
+			privateKey:   "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantHost:     "http://localhost:3000",
+			wantAudience: "did:web:gyoka.example.com#gyoka_editor",
+			wantUserID:   "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+			wantHeaders: map[string]string{
+				"CF-Access-Client-Id":     "gyoka-test-access-id-8041",
+				"CF-Access-Client-Secret": "gyoka-test-access-secret-2c57",
+			},
+			wantAuthMode:   gyokaAuthInterService,
+			wantIntervalMS: defaultGyokaMinRequestIntervalMS,
+		},
+		{
+			name: "custom header requires environment variable",
+			configBody: "directHost: http://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n" +
+				"  CF-Access-Client-Id: ${YUGE_TEST_GYOKA_ACCESS_ID_MISSING}\n",
+			env:        map[string]string{"YUGE_TEST_GYOKA_ACCESS_ID_MISSING": ""},
+			privateKey: "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantErr:    ErrGyokaHeaderEnvNotSet,
+		},
+		{
+			name: "custom headers require private key authentication",
+			configBody: "host: gyoka.example.com\n" +
+				"userIdentity: yuge.bsky.social\n" +
+				"headers:\n" +
+				"  X-Gyoka-Test: test-value\n",
+			appPassword: "app-password",
+			wantErr:     ErrGyokaHeadersRequirePrivateKey,
+		},
+		{
+			name: "authorization header is reserved",
+			configBody: "directHost: http://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n" +
+				"  Authorization: Bearer custom-token\n",
+			privateKey: "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantErr:    ErrGyokaAuthorizationHeaderReserved,
+		},
+		{
+			name: "invalid custom header name",
+			configBody: "directHost: http://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"headers:\n" +
+				"  \"Bad Header\": value\n",
+			privateKey: "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D",
+			wantErr:    ErrGyokaConfigInvalid,
+		},
+		{
 			name: "private key takes precedence over app password",
 			configBody: "directHost: http://localhost:3000\n" +
 				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
@@ -138,6 +204,10 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
 			configDir := t.TempDir()
 			if tt.configBody != "" {
 				if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte(tt.configBody), 0600); err != nil {
@@ -164,6 +234,11 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 			if config.audience != tt.wantAudience {
 				t.Errorf("audience = %q, want %q", config.audience, tt.wantAudience)
 			}
+			for name, want := range tt.wantHeaders {
+				if got := config.headers.Get(name); got != want {
+					t.Errorf("headers[%q] = %q, want %q", name, got, want)
+				}
+			}
 			if config.authMode != tt.wantAuthMode {
 				t.Errorf("authMode = %v, want %v", config.authMode, tt.wantAuthMode)
 			}
@@ -187,7 +262,7 @@ func TestLoadGyokaProjectionConfigForStartup(t *testing.T) {
 	if enabled {
 		t.Fatal("loadGyokaProjectionConfigForStartup() enabled = true, want false")
 	}
-	if config != (gyokaProjectionConfig{}) {
+	if !reflect.DeepEqual(config, gyokaProjectionConfig{}) {
 		t.Fatalf("loadGyokaProjectionConfigForStartup() config = %+v, want empty config", config)
 	}
 

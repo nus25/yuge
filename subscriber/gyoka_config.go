@@ -3,6 +3,7 @@ package subscriber
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,17 +17,20 @@ import (
 const defaultGyokaMinRequestIntervalMS = 1000
 
 var (
-	ErrGyokaConfigNotFound       = errors.New("gyoka configuration file not found")
-	ErrGyokaConfigInvalid        = errors.New("gyoka configuration is invalid")
-	ErrGyokaAppPasswordNotSet    = errors.New("GYOKA_APP_PASSWORD is not set")
-	ErrGyokaAuthenticationNotSet = errors.New("GYOKA_APP_PASSWORD or GYOKA_PRIVATE_KEY is not set")
-	ErrGyokaPrivateKeyInvalid    = errors.New("GYOKA_PRIVATE_KEY is invalid")
-	ErrGyokaAudienceNotSet       = errors.New("gyoka audience is not set")
-	ErrGyokaDirectHostNotSet     = errors.New("gyoka direct host is not set")
-	ErrGyokaDirectHostInvalid    = errors.New("gyoka direct host must be an HTTP(S) URL")
-	ErrGyokaHostNotSet           = errors.New("gyoka host is not set")
-	ErrGyokaUserIdentityNotSet   = errors.New("gyoka user identity is not set")
-	ErrGyokaUserIdentityInvalid  = errors.New("gyoka user identity must be a DID for inter-service authentication")
+	ErrGyokaConfigNotFound              = errors.New("gyoka configuration file not found")
+	ErrGyokaConfigInvalid               = errors.New("gyoka configuration is invalid")
+	ErrGyokaAppPasswordNotSet           = errors.New("GYOKA_APP_PASSWORD is not set")
+	ErrGyokaAuthenticationNotSet        = errors.New("GYOKA_APP_PASSWORD or GYOKA_PRIVATE_KEY is not set")
+	ErrGyokaPrivateKeyInvalid           = errors.New("GYOKA_PRIVATE_KEY is invalid")
+	ErrGyokaAudienceNotSet              = errors.New("gyoka audience is not set")
+	ErrGyokaDirectHostNotSet            = errors.New("gyoka direct host is not set")
+	ErrGyokaDirectHostInvalid           = errors.New("gyoka direct host must be an HTTP(S) URL")
+	ErrGyokaHostNotSet                  = errors.New("gyoka host is not set")
+	ErrGyokaUserIdentityNotSet          = errors.New("gyoka user identity is not set")
+	ErrGyokaUserIdentityInvalid         = errors.New("gyoka user identity must be a DID for inter-service authentication")
+	ErrGyokaHeaderEnvNotSet             = errors.New("gyoka header environment variable is not set")
+	ErrGyokaHeadersRequirePrivateKey    = errors.New("gyoka custom headers require private key authentication")
+	ErrGyokaAuthorizationHeaderReserved = errors.New("Authorization header is reserved for inter-service authentication")
 )
 
 type gyokaAuthMode uint8
@@ -55,16 +59,18 @@ type gyokaProjectionConfig struct {
 	appPassword          string
 	issuerDID            syntax.DID
 	privateKey           atcrypto.PrivateKey
+	headers              http.Header
 	authMode             gyokaAuthMode
 	minRequestIntervalMS int
 }
 
 type gyokaConfigFile struct {
-	Host                 string `yaml:"host"`
-	DirectHost           string `yaml:"directHost"`
-	Audience             string `yaml:"audience"`
-	UserIdentity         string `yaml:"userIdentity"`
-	MinRequestIntervalMS int    `yaml:"minRequestIntervalMs"`
+	Host                 string            `yaml:"host"`
+	DirectHost           string            `yaml:"directHost"`
+	Audience             string            `yaml:"audience"`
+	UserIdentity         string            `yaml:"userIdentity"`
+	MinRequestIntervalMS int               `yaml:"minRequestIntervalMs"`
+	Headers              map[string]string `yaml:"headers"`
 }
 
 func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded string) (gyokaProjectionConfig, error) {
@@ -94,6 +100,9 @@ func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded s
 		minRequestIntervalMS: fileConfig.MinRequestIntervalMS,
 	}
 	if strings.TrimSpace(privateKeyEncoded) == "" {
+		if len(fileConfig.Headers) > 0 {
+			return gyokaProjectionConfig{}, ErrGyokaHeadersRequirePrivateKey
+		}
 		if strings.TrimSpace(appPassword) == "" {
 			return gyokaProjectionConfig{}, ErrGyokaAuthenticationNotSet
 		}
@@ -120,12 +129,66 @@ func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded s
 	if err != nil {
 		return gyokaProjectionConfig{}, fmt.Errorf("%w: %v", ErrGyokaUserIdentityInvalid, err)
 	}
+	headers, err := resolveGyokaHeaders(fileConfig.Headers)
+	if err != nil {
+		return gyokaProjectionConfig{}, err
+	}
 	config.host = directHost
 	config.audience = fileConfig.Audience
 	config.issuerDID = issuerDID
 	config.privateKey = privateKey
+	config.headers = headers
 	config.authMode = gyokaAuthInterService
 	return config, nil
+}
+
+func resolveGyokaHeaders(configured map[string]string) (http.Header, error) {
+	if len(configured) == 0 {
+		return nil, nil
+	}
+
+	headers := make(http.Header, len(configured))
+	for name, rawValue := range configured {
+		if !isValidGyokaHeaderName(name) {
+			return nil, fmt.Errorf("%w: invalid gyoka header name %q", ErrGyokaConfigInvalid, name)
+		}
+		canonicalName := http.CanonicalHeaderKey(name)
+		if strings.EqualFold(name, "Authorization") {
+			return nil, ErrGyokaAuthorizationHeaderReserved
+		}
+
+		var missingEnv string
+		value := os.Expand(rawValue, func(envName string) string {
+			envValue, ok := os.LookupEnv(envName)
+			if !ok || strings.TrimSpace(envValue) == "" {
+				missingEnv = envName
+				return ""
+			}
+			return envValue
+		})
+		if missingEnv != "" {
+			return nil, fmt.Errorf("%w: %s", ErrGyokaHeaderEnvNotSet, missingEnv)
+		}
+		headers.Set(canonicalName, value)
+	}
+	return headers, nil
+}
+
+func isValidGyokaHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for position := 0; position < len(name); position++ {
+		character := name[position]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("!#$%&'*+-.^_`|~", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func parseGyokaDirectHost(rawURL string) (string, error) {
