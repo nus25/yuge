@@ -119,6 +119,7 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		UserIdentity: gyokaConfig.userIdentity,
 		AppPassword:  gyokaConfig.appPassword,
 		PrivateKey:   gyokaConfig.privateKey,
+		Headers:      gyokaConfig.headers,
 	}, gyokaProjectionRuntimeOptions{
 		completedRetention: cctx.Duration("projection-completed-retention"),
 		clientOptions:      projectionClientOptions,

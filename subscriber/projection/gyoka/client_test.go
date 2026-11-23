@@ -207,8 +207,10 @@ func TestGyokaEditor_AddRejectsInvalidPostReason(t *testing.T) {
 
 func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(t *testing.T) {
 	const (
-		issuerDID = "did:plc:ewvi7nxzyoun6zhxrhsample"
-		audience  = "did:web:gyoka.example.com#gyoka_editor"
+		issuerDID          = "did:plc:ewvi7nxzyoun6zhxrhsample"
+		audience           = "did:web:gyoka.example.com#gyoka_editor"
+		accessClientID     = "gyoka-projection-test-id-4912"
+		accessClientSecret = "gyoka-projection-test-secret-71ab"
 	)
 
 	privateKey, err := atcrypto.GeneratePrivateKeyP256()
@@ -235,6 +237,12 @@ func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(
 		if proxy := request.Header.Get("Atproto-Proxy"); proxy != "" {
 			t.Errorf("Atproto-Proxy = %q, want empty", proxy)
 		}
+		if got := request.Header.Get("CF-Access-Client-Id"); got != accessClientID {
+			t.Errorf("CF-Access-Client-Id = %q, want %q", got, accessClientID)
+		}
+		if got := request.Header.Get("CF-Access-Client-Secret"); got != accessClientSecret {
+			t.Errorf("CF-Access-Client-Secret = %q, want %q", got, accessClientSecret)
+		}
 		endpoint := syntax.NSID("net.nusno.gyoka.ping")
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 		if _, err := validator.Validate(request.Context(), token, &endpoint); err != nil {
@@ -251,6 +259,10 @@ func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(
 		UserIdentity: issuerDID,
 		AppPassword:  "app-password-that-must-not-be-used",
 		PrivateKey:   privateKey,
+		Headers: http.Header{
+			"CF-Access-Client-Id":     []string{accessClientID},
+			"CF-Access-Client-Secret": []string{accessClientSecret},
+		},
 	}, nil, WithMinRequestInterval(0))
 	if err != nil {
 		t.Fatalf("NewGyokaEditor() error = %v", err)

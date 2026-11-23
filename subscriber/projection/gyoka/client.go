@@ -43,6 +43,7 @@ type ClientConfig struct {
 	UserIdentity string
 	AppPassword  string
 	PrivateKey   atcrypto.PrivateKey
+	Headers      http.Header
 }
 
 type GyokaAPI interface {
@@ -146,6 +147,7 @@ func newATProtoClient(ctx context.Context, config ClientConfig) (*client.Client,
 		Audience:   config.Audience,
 		Issuer:     issuerDID,
 		PrivateKey: config.PrivateKey,
+		Headers:    config.Headers,
 	})
 }
 
