@@ -67,6 +67,7 @@ type gyokaProjectionConfig struct {
 type gyokaConfigFile struct {
 	Host                 string            `yaml:"host"`
 	DirectHost           string            `yaml:"directHost"`
+	AllowInsecureHTTP    bool              `yaml:"allowInsecureHttp"`
 	Audience             string            `yaml:"audience"`
 	UserIdentity         string            `yaml:"userIdentity"`
 	MinRequestIntervalMS int               `yaml:"minRequestIntervalMs"`
@@ -121,7 +122,7 @@ func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded s
 	if strings.TrimSpace(fileConfig.Audience) == "" {
 		return gyokaProjectionConfig{}, ErrGyokaAudienceNotSet
 	}
-	directHost, err := parseGyokaDirectHost(fileConfig.DirectHost)
+	directHost, err := parseGyokaDirectHost(fileConfig.DirectHost, fileConfig.AllowInsecureHTTP)
 	if err != nil {
 		return gyokaProjectionConfig{}, err
 	}
@@ -191,7 +192,7 @@ func isValidGyokaHeaderName(name string) bool {
 	return true
 }
 
-func parseGyokaDirectHost(rawURL string) (string, error) {
+func parseGyokaDirectHost(rawURL string, allowInsecureHTTP bool) (string, error) {
 	directHost := strings.TrimSpace(rawURL)
 	if directHost == "" {
 		return "", ErrGyokaDirectHostNotSet
@@ -199,6 +200,9 @@ func parseGyokaDirectHost(rawURL string) (string, error) {
 	parsed, err := url.Parse(directHost)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return "", ErrGyokaDirectHostInvalid
+	}
+	if parsed.Scheme == "http" && !allowInsecureHTTP {
+		return "", fmt.Errorf("%w: HTTPS is required unless allowInsecureHttp is true", ErrGyokaDirectHostInvalid)
 	}
 	return directHost, nil
 }
