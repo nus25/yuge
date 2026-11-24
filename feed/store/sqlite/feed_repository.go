@@ -146,21 +146,21 @@ func (r *FeedRepository) DeleteAllPosts(ctx context.Context, feedID string) erro
 }
 
 func (r *FeedRepository) TrimOverflow(ctx context.Context, params storerepo.TrimOverflowParams) ([]types.Post, error) {
-	if params.TrimAt <= 0 {
-		return nil, nil
+	trimAt := params.TrimAt
+	if trimAt < 0 {
+		trimAt = 0
+	}
+	remain := params.Remain
+	if remain < 0 {
+		remain = 0
 	}
 
 	var postCount int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM feed_posts WHERE feed_id = ?;`, params.FeedID).Scan(&postCount); err != nil {
 		return nil, fmt.Errorf("count feed posts: %w", err)
 	}
-	if postCount <= params.TrimAt {
+	if postCount <= trimAt {
 		return nil, nil
-	}
-
-	remain := params.Remain
-	if remain < 0 {
-		remain = 0
 	}
 
 	rows, err := r.db.QueryContext(ctx, `

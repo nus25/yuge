@@ -523,6 +523,47 @@ func TestFeedMutationCoordinator_TrimFeed_ProjectsTrimForTrimmedPosts(t *testing
 	}
 }
 
+func TestFeedMutationCoordinator_TrimFeed_RemainZeroEnqueuesTrimEvenWhenNoPostsWereTrimmed(t *testing.T) {
+	t.Parallel()
+
+	transactor := &fakeFeedMutationTransactor{
+		feedRepo:   &fakeFeedRepository{trimmedPosts: nil},
+		outboxRepo: &fakeOutboxRepository{},
+	}
+	coordinator := NewFeedMutationCoordinator(transactor)
+
+	err := coordinator.TrimFeed(context.Background(), TrimFeedParams{
+		FeedID:     "feed-1",
+		FeedURI:    types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Remain:     0,
+		MutationID: "mutation-trim-zero",
+	})
+	if err != nil {
+		t.Fatalf("TrimFeed() error = %v", err)
+	}
+	if transactor.feedRepo.lastTrim.TrimAt != 0 || transactor.feedRepo.lastTrim.Remain != 0 {
+		t.Fatalf("TrimOverflow params = %+v, want TrimAt=0 Remain=0", transactor.feedRepo.lastTrim)
+	}
+	if transactor.outboxRepo.enqueueCalls != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1", transactor.outboxRepo.enqueueCalls)
+	}
+	if transactor.outboxRepo.lastEnqueue.Operation != "trim" {
+		t.Fatalf("Operation = %s, want trim", transactor.outboxRepo.lastEnqueue.Operation)
+	}
+	if transactor.outboxRepo.lastEnqueue.OpKey != "mutation-trim-zero:trim:feed-1:0" {
+		t.Fatalf("OpKey = %s", transactor.outboxRepo.lastEnqueue.OpKey)
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(transactor.outboxRepo.lastEnqueue.PayloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal trim payload: %v", err)
+	}
+	if payload.Count != 0 {
+		t.Fatalf("trim payload count = %d, want 0", payload.Count)
+	}
+}
+
 func TestFeedMutationCoordinator_TrimFeed_RollsBackWhenOutboxEnqueueFails(t *testing.T) {
 	t.Parallel()
 

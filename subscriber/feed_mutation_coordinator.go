@@ -309,7 +309,7 @@ func (c *FeedMutationCoordinator) TrimFeed(ctx context.Context, params TrimFeedP
 		if err != nil {
 			return err
 		}
-		if len(trimmedPosts) > 0 {
+		if len(trimmedPosts) > 0 || remain == 0 {
 			if err := enqueueTrimProjection(ctx, outboxRepo, params.FeedID, params.FeedURI, remain, mutationID); err != nil {
 				return err
 			}
