@@ -44,7 +44,7 @@ func run(args []string) {
 					},
 					&cli.Int64Flag{
 						Name:    "override-cursor",
-						Usage:   "override cursor value for jetstream",
+						Usage:   "override saved jetstream cursor (0 or less starts live)",
 						Value:   -1,
 						EnvVars: []string{"OVERRIDE_CURSOR"},
 					},

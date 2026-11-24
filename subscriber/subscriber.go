@@ -113,6 +113,17 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 			logger.Error("failed to close sqlite runtime persistence", "error", err)
 		}
 	}()
+	cursorStore := newJetstreamCursorStore(cctx.String("data-directory-path"))
+	var cursorOverride *int64
+	if cctx.IsSet("override-cursor") {
+		value := cctx.Int64("override-cursor")
+		cursorOverride = &value
+	}
+	cursor, err := initialJetstreamCursor(cursorStore, cursorOverride)
+	if err != nil {
+		return fmt.Errorf("initialize jetstream cursor: %w", err)
+	}
+	logger.Info("initialized jetstream cursor", "cursor", cursor, "overridden", cursorOverride != nil)
 	projectionRuntime, err := startGyokaProjectionRuntime(ctx, logger, sqlitePersistence.mutationDB, gyoka.ClientConfig{
 		Host:         gyokaConfig.host,
 		Audience:     gyokaConfig.audience,
@@ -160,9 +171,10 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return err
 	}
 	h.Jsc = jsc
-	cursor := cctx.Int64("override-cursor")
 	jetstreamController := NewRuntimeJetstreamController(log, h, u.String(), cursor)
-	if _, err := jetstreamController.Connect(JetstreamConnectRequest{Cursor: &cursor}); err != nil {
+	jetstreamController.cursorStore = cursorStore
+	jetstreamController.lastSavedCursor = cursor
+	if _, err := jetstreamController.Connect(JetstreamConnectRequest{}); err != nil {
 		log.Error("failed to start jetstream controller", "error", err)
 		return err
 	}
