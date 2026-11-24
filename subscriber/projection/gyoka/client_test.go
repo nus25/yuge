@@ -1,8 +1,10 @@
 package gyoka
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,10 +17,12 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	client "github.com/nus25/gyoka-client/go-atproto"
 	gyokaschema "github.com/nus25/gyoka-client/go-atproto/schema/gyoka"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type fakeGyokaAPI struct {
 	pingErr     error
+	putErr      error
 	putInput    *gyokaschema.FeedPutPosts_Input
 	removeInput *gyokaschema.FeedRemovePosts_Input
 }
@@ -30,7 +34,7 @@ func (a *fakeGyokaAPI) Ping(context.Context) error { return a.pingErr }
 
 func (a *fakeGyokaAPI) PutPosts(_ context.Context, input *gyokaschema.FeedPutPosts_Input) error {
 	a.putInput = input
-	return nil
+	return a.putErr
 }
 
 func (a *fakeGyokaAPI) RemovePosts(_ context.Context, input *gyokaschema.FeedRemovePosts_Input) error {
@@ -48,6 +52,55 @@ func (a *fakeGyokaAPI) TrimPosts(context.Context, *gyokaschema.FeedTrimPosts_Inp
 
 func (a *fakeGyokaAPI) ListPosts(ctx context.Context, feed string, postUri string, author string, cursor string, limit int64) (*gyokaschema.FeedListPosts_Output, error) {
 	return nil, nil
+}
+
+func TestGyokaEditor_RequestDebugAndDurationMetric(t *testing.T) {
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	api := &fakeGyokaAPI{}
+	editor := newGyokaEditor(api, logger, WithMinRequestInterval(0))
+	beforeCount := projectionRequestSampleCount(t, "add", "success")
+
+	if err := editor.Add(PostParams{
+		FeedUri:   "at://did:plc:feed/app.bsky.feed.generator/sample",
+		Did:       "did:plc:author",
+		Rkey:      "post-1",
+		Cid:       "bafy-test",
+		IndexedAt: time.Date(2026, 8, 22, 12, 30, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	logText := logBuffer.String()
+	if !strings.Contains(logText, "gyoka projection request") {
+		t.Fatalf("debug log = %q, want gyoka projection request", logText)
+	}
+	if !strings.Contains(logText, "operation=add") {
+		t.Fatalf("debug log = %q, want operation=add", logText)
+	}
+	if !strings.Contains(logText, "duration_ms=") {
+		t.Fatalf("debug log = %q, want duration_ms", logText)
+	}
+	if got := projectionRequestSampleCount(t, "add", "success"); got != beforeCount+1 {
+		t.Fatalf("projection request histogram count = %d, want %d", got, beforeCount+1)
+	}
+}
+
+func projectionRequestSampleCount(t *testing.T, operation, status string) uint64 {
+	t.Helper()
+	observer, err := gyokaProjectionRequestDuration.GetMetricWithLabelValues(operation, status)
+	if err != nil {
+		t.Fatalf("GetMetricWithLabelValues() error = %v", err)
+	}
+	metric, ok := observer.(interface{ Write(*dto.Metric) error })
+	if !ok {
+		t.Fatalf("histogram metric does not support Write")
+	}
+	var dtoMetric dto.Metric
+	if err := metric.Write(&dtoMetric); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	return dtoMetric.GetHistogram().GetSampleCount()
 }
 
 func TestGyokaEditor_AddMapsATProtoLexiconInput(t *testing.T) {

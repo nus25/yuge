@@ -182,7 +182,19 @@ func (e *GyokaEditor) retry(ctx context.Context, operation string, request func(
 				return err
 			}
 		}
+		startedAt := time.Now()
 		err := classifyGyokaError(request(ctx))
+		elapsed := time.Since(startedAt)
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		gyokaProjectionRequestDuration.WithLabelValues(operation, status).Observe(elapsed.Seconds())
+		e.logger.Debug("gyoka projection request",
+			"operation", operation,
+			"duration_ms", elapsed.Milliseconds(),
+			"status", status,
+		)
 		if err == nil {
 			return nil
 		}
