@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/bluesky-social/jetstream/pkg/models"
@@ -33,6 +35,7 @@ type Scheduler interface {
 
 type Client struct {
 	Scheduler  Scheduler
+	conMu      sync.Mutex
 	con        *websocket.Conn
 	Cursor     int64
 	config     *ClientConfig
@@ -82,10 +85,13 @@ func NewClient(config *ClientConfig, logger *slog.Logger, scheduler Scheduler) (
 }
 
 func (c *Client) SendPing() error {
-	if c.con == nil {
+	c.conMu.Lock()
+	con := c.con
+	c.conMu.Unlock()
+	if con == nil {
 		return nil
 	}
-	if err := c.con.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(time.Second*10)); err != nil {
+	if err := con.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(time.Second*10)); err != nil {
 		return err
 	}
 	return nil
@@ -110,25 +116,31 @@ func (c *Client) WebsocketURL() string {
 	return c.config.WebsocketURL
 }
 
+func (c *Client) CurrentCursor() int64 {
+	return stdatomic.LoadInt64(&c.Cursor)
+}
+
+func (c *Client) SetCursor(cursor int64) {
+	stdatomic.StoreInt64(&c.Cursor, cursor)
+}
+
 func (c *Client) Close() error {
-	if c.con == nil {
+	c.conMu.Lock()
+	con := c.con
+	c.con = nil
+	c.conMu.Unlock()
+	if con == nil {
 		return nil
 	}
-	err := c.con.Close()
-	c.con = nil
-	return err
+	return con.Close()
 }
 
 func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 	defer func() {
-		if c.con != nil {
-			err := c.con.Close() // 接続を明示的にクローズ
-			if err != nil {
-				c.logger.Error("failed to close connection", "error", err)
-			}
-			c.con = nil
-			c.logger.Info("jetstream connection closed.", "last curosr", c.Cursor)
+		if err := c.Close(); err != nil {
+			c.logger.Error("failed to close connection", "error", err)
 		}
+		c.logger.Info("jetstream connection closed.", "last curosr", c.CurrentCursor())
 	}()
 
 	header := http.Header{}
@@ -142,9 +154,9 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 	if c.config.Compress {
 		params = append(params, "compress=true")
 	}
-	c.Cursor = cursor
-	if c.Cursor > 0 {
-		params = append(params, fmt.Sprintf("cursor=%d", c.Cursor))
+	c.SetCursor(cursor)
+	if cursor > 0 {
+		params = append(params, fmt.Sprintf("cursor=%d", cursor))
 	} else {
 		c.logger.Info("no valid cursor provided, starting from live stream")
 	}
@@ -170,7 +182,7 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 		return fmt.Errorf("failed to parse connection url %q: %w", c.config.WebsocketURL, err)
 	}
 
-	c.logger.Info("connecting to websocket", "url", u.String(), "cursor", c.Cursor)
+	c.logger.Info("connecting to websocket", "url", u.String(), "cursor", cursor)
 	con, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err
@@ -178,7 +190,7 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 
 	//ホストjetstreamとのping&pong設定
 	con.SetPingHandler(func(message string) error {
-		err := c.con.WriteControl(websocket.PongMessage, []byte(message), time.Now().Add(time.Second*60))
+		err := con.WriteControl(websocket.PongMessage, []byte(message), time.Now().Add(time.Second*60))
 		if err == websocket.ErrCloseSent {
 			return nil
 		} else if e, ok := err.(net.Error); ok && e.Temporary() {
@@ -189,7 +201,7 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 
 	con.SetPongHandler(func(message string) error {
 		c.logger.Debug("received pong from server, resetting read deadline", "message", message)
-		if err := c.con.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
+		if err := con.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
 			return fmt.Errorf("failed to set read deadline: %s", err)
 		}
 		return nil
@@ -197,20 +209,26 @@ func (c *Client) ConnectAndRead(ctx context.Context, cursor int64) error {
 
 	con.SetCloseHandler(func(code int, text string) error {
 		c.logger.Info("connection closed", "code", code, "text", text)
-		c.Scheduler.Shutdown()
 		return nil
 	})
 
+	c.conMu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.conMu.Unlock()
+		_ = con.Close()
+		return err
+	}
 	c.con = con
+	c.conMu.Unlock()
 
-	if err := c.readLoop(ctx); err != nil {
+	if err := c.readLoop(ctx, con); err != nil {
 		return fmt.Errorf("read loop failed: %w", err)
 	}
 
 	return nil
 }
 
-func (c *Client) readLoop(ctx context.Context) error {
+func (c *Client) readLoop(ctx context.Context, con *websocket.Conn) error {
 	c.logger.Info("starting websocket read loop")
 
 	bytesRead := clientBytesRead.WithLabelValues(c.config.WebsocketURL)
@@ -226,7 +244,7 @@ func (c *Client) readLoop(ctx context.Context) error {
 			s <- struct{}{}
 			return nil
 		default:
-			_, msg, err := c.con.ReadMessage()
+			_, msg, err := con.ReadMessage()
 			if err != nil {
 				c.logger.Error("failed to read message from websocket", "error", err)
 				return fmt.Errorf("failed to read message from websocket: %w", err)
@@ -258,7 +276,7 @@ func (c *Client) readLoop(ctx context.Context) error {
 				c.logger.Error("failed to add work to scheduler", "error", err)
 				return fmt.Errorf("failed to add work to scheduler: %w", err)
 			}
-			c.Cursor = event.TimeUS
+			c.SetCursor(event.TimeUS)
 		}
 	}
 }

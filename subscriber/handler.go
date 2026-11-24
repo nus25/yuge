@@ -77,17 +77,17 @@ func (h *Handler) HandleJetstream(ctx context.Context, log *slog.Logger, cursor 
 			"context", ctx.Err())
 		if errors.Is(err, context.Canceled) {
 			// 正常なキャンセルの場合
-			return h.Jsc.Cursor, context.Canceled
+			return h.Jsc.CurrentCursor(), context.Canceled
 		}
 		if strings.Contains(err.Error(), "use of closed network connection") {
 			// 接続が閉じられた場合
-			return h.Jsc.Cursor, err
+			return h.Jsc.CurrentCursor(), err
 		}
 		// その他の予期せぬエラーの場合
-		return h.Jsc.Cursor, fmt.Errorf("failed to connect and read: %w", err)
+		return h.Jsc.CurrentCursor(), fmt.Errorf("failed to connect and read: %w", err)
 	}
 
-	return h.Jsc.Cursor, nil
+	return h.Jsc.CurrentCursor(), nil
 }
 
 func (h *Handler) HandlePostEvent(ctx context.Context, evt *models.Event) error {

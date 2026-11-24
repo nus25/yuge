@@ -56,23 +56,30 @@ type RuntimeJetstreamController struct {
 	logger *slog.Logger
 	h      *Handler
 
-	mu         sync.Mutex
-	currentURL string
-	cursor     int64
-	cancel     context.CancelFunc
-	done       chan struct{}
+	operationMu        sync.Mutex
+	mu                 sync.Mutex
+	currentURL         string
+	cursor             int64
+	cancel             context.CancelFunc
+	done               chan struct{}
+	cursorStore        *jetstreamCursorStore
+	cursorSaveInterval time.Duration
+	lastSavedCursor    int64
 }
 
 func NewRuntimeJetstreamController(logger *slog.Logger, h *Handler, defaultURL string, initialCursor int64) *RuntimeJetstreamController {
 	return &RuntimeJetstreamController{
-		logger:     logger.With("source", "jetstream-controller"),
-		h:          h,
-		currentURL: defaultURL,
-		cursor:     initialCursor,
+		logger:             logger.With("source", "jetstream-controller"),
+		h:                  h,
+		currentURL:         defaultURL,
+		cursor:             initialCursor,
+		cursorSaveInterval: 5 * time.Second,
 	}
 }
 
 func (c *RuntimeJetstreamController) Connect(req JetstreamConnectRequest) (JetstreamStatusResponse, error) {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
 	if req.URL != nil {
 		u, err := url.Parse(*req.URL)
 		if err != nil || u.Scheme == "" || u.Host == "" {
@@ -114,6 +121,13 @@ func (c *RuntimeJetstreamController) Connect(req JetstreamConnectRequest) (Jetst
 		c.currentURL = *req.URL
 	}
 	if req.Cursor != nil {
+		if c.cursorStore != nil {
+			if err := c.cursorStore.Save(*req.Cursor); err != nil {
+				c.mu.Unlock()
+				return JetstreamStatusResponse{}, fmt.Errorf("save requested jetstream cursor: %w", err)
+			}
+			c.lastSavedCursor = *req.Cursor
+		}
 		c.cursor = *req.Cursor
 	}
 	defer c.mu.Unlock()
@@ -124,11 +138,14 @@ func (c *RuntimeJetstreamController) Connect(req JetstreamConnectRequest) (Jetst
 	if err := c.h.Jsc.SetWebsocketURL(c.currentURL); err != nil {
 		return JetstreamStatusResponse{}, err
 	}
+	c.h.Jsc.SetCursor(c.cursor)
 	c.startLocked()
 	return c.statusLocked(), nil
 }
 
 func (c *RuntimeJetstreamController) Disconnect() (JetstreamStatusResponse, error) {
+	c.operationMu.Lock()
+	defer c.operationMu.Unlock()
 	c.mu.Lock()
 	waitCh := c.done
 	cancel := c.cancel
@@ -164,10 +181,32 @@ func (c *RuntimeJetstreamController) startLocked() {
 }
 
 func (c *RuntimeJetstreamController) run(ctx context.Context, done chan struct{}, cursor int64) {
+	persistenceDone := make(chan struct{})
+	stopPersistence := make(chan struct{})
+	go func() {
+		defer close(persistenceDone)
+		ticker := time.NewTicker(c.cursorSaveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				c.mu.Lock()
+				c.saveCursorLocked(c.h.Jsc.CurrentCursor())
+				c.mu.Unlock()
+			case <-ctx.Done():
+				return
+			case <-stopPersistence:
+				return
+			}
+		}
+	}()
 	defer func() {
+		close(stopPersistence)
+		<-persistenceDone
 		c.mu.Lock()
 		if c.h != nil && c.h.Jsc != nil {
-			c.cursor = c.h.Jsc.Cursor
+			c.cursor = c.h.Jsc.CurrentCursor()
+			c.saveCursorLocked(c.cursor)
 		}
 		c.cancel = nil
 		c.done = nil
@@ -199,6 +238,17 @@ func (c *RuntimeJetstreamController) run(ctx context.Context, done chan struct{}
 	}
 }
 
+func (c *RuntimeJetstreamController) saveCursorLocked(cursor int64) {
+	if c.cursorStore == nil || cursor == c.lastSavedCursor {
+		return
+	}
+	if err := c.cursorStore.Save(cursor); err != nil {
+		c.logger.Error("failed to save jetstream cursor", "cursor", cursor, "error", err)
+		return
+	}
+	c.lastSavedCursor = cursor
+}
+
 func (c *RuntimeJetstreamController) statusLocked() JetstreamStatusResponse {
 	resp := JetstreamStatusResponse{
 		Connected:    c.cancel != nil,
@@ -206,7 +256,7 @@ func (c *RuntimeJetstreamController) statusLocked() JetstreamStatusResponse {
 		Cursor:       c.cursor,
 	}
 	if c.h != nil && c.h.Jsc != nil {
-		resp.Cursor = c.h.Jsc.Cursor
+		resp.Cursor = c.h.Jsc.CurrentCursor()
 		if resp.WebsocketURL == "" {
 			resp.WebsocketURL = c.h.Jsc.WebsocketURL()
 		}

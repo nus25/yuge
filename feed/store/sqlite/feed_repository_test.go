@@ -194,6 +194,58 @@ func TestFeedRepositoryTrimOverflowKeepsNewestPosts(t *testing.T) {
 	}
 }
 
+func TestFeedRepositoryTrimOverflow_RemainZero(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, Options{
+		Path:         filepath.Join(t.TempDir(), "feed-trim-zero.db"),
+		SyncMode:     "NORMAL",
+		BusyTimeout:  100 * time.Millisecond,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	repo := NewFeedRepository(db)
+	post := types.Post{
+		Feed:      types.FeedUri("at://did:plc:test/app.bsky.feed.generator/sample"),
+		Uri:       types.PostUri("at://did:plc:user1/app.bsky.feed.post/post1"),
+		Cid:       "cid-1",
+		IndexedAt: "2026-05-11T01:00:00Z",
+		Langs:     []string{"ja"},
+	}
+	if err := repo.PutPost(ctx, storerepo.PutPostParams{FeedID: "feed-1", Post: post}); err != nil {
+		t.Fatalf("PutPost() error = %v", err)
+	}
+
+	trimmedPosts, err := repo.TrimOverflow(ctx, storerepo.TrimOverflowParams{FeedID: "feed-1", TrimAt: 0, Remain: 0})
+	if err != nil {
+		t.Fatalf("TrimOverflow() error = %v", err)
+	}
+	if len(trimmedPosts) != 1 {
+		t.Fatalf("TrimOverflow() len = %d, want 1", len(trimmedPosts))
+	}
+
+	remainingPosts, err := repo.ListPosts(ctx, storerepo.ListPostsParams{FeedID: "feed-1"})
+	if err != nil {
+		t.Fatalf("ListPosts() error = %v", err)
+	}
+	if len(remainingPosts) != 0 {
+		t.Fatalf("ListPosts() len = %d, want 0", len(remainingPosts))
+	}
+}
+
 func TestFeedRepositoryDeleteAllPosts(t *testing.T) {
 	t.Parallel()
 
