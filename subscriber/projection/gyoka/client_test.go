@@ -270,7 +270,13 @@ func TestNewGyokaEditorUsesInterServiceAuthenticationWhenPrivateKeyIsConfigured(
 	if err != nil {
 		t.Fatalf("generate private key: %v", err)
 	}
+	t.Logf("private key multibase: %v", privateKey.Multibase())
 	publicKey, err := privateKey.PublicKey()
+	if err != nil {
+		t.Fatalf("get public key: %v", err)
+	}
+	t.Logf("public key multibase: %v", publicKey.Multibase())
+
 	if err != nil {
 		t.Fatalf("get public key: %v", err)
 	}

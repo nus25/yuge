@@ -20,8 +20,9 @@ var (
 	ErrGyokaConfigNotFound              = errors.New("gyoka configuration file not found")
 	ErrGyokaConfigInvalid               = errors.New("gyoka configuration is invalid")
 	ErrGyokaAppPasswordNotSet           = errors.New("GYOKA_APP_PASSWORD is not set")
-	ErrGyokaAuthenticationNotSet        = errors.New("GYOKA_APP_PASSWORD or GYOKA_PRIVATE_KEY is not set")
-	ErrGyokaPrivateKeyInvalid           = errors.New("GYOKA_PRIVATE_KEY is invalid")
+	ErrGyokaAuthenticationNotSet        = errors.New("GYOKA_APP_PASSWORD or gyoka privateKeyFile is not set")
+	ErrGyokaPrivateKeyInvalid           = errors.New("gyoka private key is invalid")
+	ErrGyokaPrivateKeyRead              = errors.New("read gyoka private key file")
 	ErrGyokaAudienceNotSet              = errors.New("gyoka audience is not set")
 	ErrGyokaDirectHostNotSet            = errors.New("gyoka direct host is not set")
 	ErrGyokaDirectHostInvalid           = errors.New("gyoka direct host must be an HTTP(S) URL")
@@ -52,6 +53,17 @@ func (m gyokaAuthMode) String() string {
 	}
 }
 
+func (m gyokaAuthMode) credentialType() string {
+	switch m {
+	case gyokaAuthPassword:
+		return "app_password"
+	case gyokaAuthInterService:
+		return "private_key"
+	default:
+		return "disabled"
+	}
+}
+
 type gyokaProjectionConfig struct {
 	host                 string
 	audience             string
@@ -70,11 +82,12 @@ type gyokaConfigFile struct {
 	AllowInsecureHTTP    bool              `yaml:"allowInsecureHttp"`
 	Audience             string            `yaml:"audience"`
 	UserIdentity         string            `yaml:"userIdentity"`
+	PrivateKeyFile       string            `yaml:"privateKeyFile"`
 	MinRequestIntervalMS int               `yaml:"minRequestIntervalMs"`
 	Headers              map[string]string `yaml:"headers"`
 }
 
-func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded string) (gyokaProjectionConfig, error) {
+func loadGyokaProjectionConfig(configDirectory, appPassword string) (gyokaProjectionConfig, error) {
 	configPath := filepath.Join(configDirectory, "gyoka.yaml")
 	contents, err := os.ReadFile(configPath)
 	if err != nil {
@@ -100,6 +113,20 @@ func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded s
 		userIdentity:         fileConfig.UserIdentity,
 		minRequestIntervalMS: fileConfig.MinRequestIntervalMS,
 	}
+	var privateKeyEncoded string
+	if keyPath := strings.TrimSpace(fileConfig.PrivateKeyFile); keyPath != "" {
+		if !filepath.IsAbs(keyPath) {
+			keyPath = filepath.Join(filepath.Dir(configPath), keyPath)
+		}
+		keyContents, err := os.ReadFile(keyPath)
+		if err != nil {
+			return gyokaProjectionConfig{}, fmt.Errorf("%w: %w", ErrGyokaPrivateKeyRead, err)
+		}
+		privateKeyEncoded = strings.TrimSpace(string(keyContents))
+		if privateKeyEncoded == "" {
+			return gyokaProjectionConfig{}, ErrGyokaPrivateKeyInvalid
+		}
+	}
 	if strings.TrimSpace(privateKeyEncoded) == "" {
 		if len(fileConfig.Headers) > 0 {
 			return gyokaProjectionConfig{}, ErrGyokaHeadersRequirePrivateKey
@@ -117,7 +144,7 @@ func loadGyokaProjectionConfig(configDirectory, appPassword, privateKeyEncoded s
 
 	privateKey, err := atcrypto.ParsePrivateMultibase(privateKeyEncoded)
 	if err != nil {
-		return gyokaProjectionConfig{}, fmt.Errorf("%w: %v", ErrGyokaPrivateKeyInvalid, err)
+		return gyokaProjectionConfig{}, ErrGyokaPrivateKeyInvalid
 	}
 	if strings.TrimSpace(fileConfig.Audience) == "" {
 		return gyokaProjectionConfig{}, ErrGyokaAudienceNotSet
@@ -207,8 +234,8 @@ func parseGyokaDirectHost(rawURL string, allowInsecureHTTP bool) (string, error)
 	return directHost, nil
 }
 
-func loadGyokaProjectionConfigForStartup(configDirectory, appPassword, privateKey string) (gyokaProjectionConfig, bool, error) {
-	config, err := loadGyokaProjectionConfig(configDirectory, appPassword, privateKey)
+func loadGyokaProjectionConfigForStartup(configDirectory, appPassword string) (gyokaProjectionConfig, bool, error) {
+	config, err := loadGyokaProjectionConfig(configDirectory, appPassword)
 	if err != nil {
 		return gyokaProjectionConfig{}, false, err
 	}

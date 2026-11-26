@@ -57,12 +57,12 @@ func JetstreamSubscriber(cctx *cli.Context) error {
 		return fmt.Errorf("failed to parse jetstream-url: %w", err)
 	}
 
-	gyokaConfig, gyokaProjectionEnabled, err := loadGyokaProjectionConfigForStartup(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"), os.Getenv("GYOKA_PRIVATE_KEY"))
+	gyokaConfig, gyokaProjectionEnabled, err := loadGyokaProjectionConfigForStartup(cctx.String("config-directory-path"), os.Getenv("GYOKA_APP_PASSWORD"))
 	if err != nil {
 		logger.Warn("Gyoka projection disabled because its configuration could not be loaded", "error", err)
 	}
 	if gyokaProjectionEnabled {
-		logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity, "authentication", gyokaConfig.authMode.String())
+		logger.Info("configuring gyoka projection runtime", "host", gyokaConfig.host, "userIdentity", gyokaConfig.userIdentity, "authentication", gyokaConfig.authMode.String(), "credential_type", gyokaConfig.authMode.credentialType())
 	}
 
 	// setup feed service

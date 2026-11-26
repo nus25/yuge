@@ -5,23 +5,88 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
+func TestLoadGyokaProjectionConfigPrivateKeyFile(t *testing.T) {
+	const validKey = "z42tvqQS5sVhaV1jLZ5P6ZKEPEbSpYavNVmT88YDYV3MEZ8D"
+	const invalidKey = "invalid-secret-key-value"
+	tests := []struct {
+		name       string
+		keyContent string
+		absolute   bool
+		missing    bool
+		directory  bool
+		wantErr    bool
+	}{
+		{name: "relative path and newline", keyContent: validKey + "\n"},
+		{name: "absolute path", keyContent: validKey, absolute: true},
+		{name: "missing file", missing: true, wantErr: true},
+		{name: "unreadable file", directory: true, wantErr: true},
+		{name: "empty file", wantErr: true},
+		{name: "invalid key", keyContent: invalidKey, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			keyPath := filepath.Join(configDir, "private.key")
+			if tt.directory {
+				if err := os.Mkdir(keyPath, 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else if !tt.missing {
+				if err := os.WriteFile(keyPath, []byte(tt.keyContent), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			configuredPath := "private.key"
+			if tt.absolute {
+				configuredPath = keyPath
+			}
+			configBody := "directHost: https://localhost:3000\n" +
+				"audience: did:web:gyoka.example.com#gyoka_editor\n" +
+				"userIdentity: did:plc:ewvi7nxzyoun6zhxrhs64oiz\n" +
+				"privateKeyFile: " + strconv.Quote(configuredPath) + "\n"
+			if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte(configBody), 0600); err != nil {
+				t.Fatal(err)
+			}
+			config, enabled, err := loadGyokaProjectionConfigForStartup(configDir, "app-password")
+			if tt.wantErr {
+				if err == nil || enabled {
+					t.Fatalf("expected disabled projection and error, got enabled=%v error=%v", enabled, err)
+				}
+				if strings.Contains(err.Error(), invalidKey) {
+					t.Fatal("error exposes private key")
+				}
+				return
+			}
+			if err != nil || !enabled || config.authMode != gyokaAuthInterService || config.privateKey == nil {
+				t.Fatalf("expected private key authentication, got enabled=%v mode=%v error=%v", enabled, config.authMode, err)
+			}
+		})
+	}
+}
+
 func TestGyokaAuthModeString(t *testing.T) {
 	tests := []struct {
-		mode gyokaAuthMode
-		want string
+		mode           gyokaAuthMode
+		want           string
+		wantCredential string
 	}{
-		{mode: gyokaAuthDisabled, want: "disabled"},
-		{mode: gyokaAuthPassword, want: "pds_proxy_password"},
-		{mode: gyokaAuthInterService, want: "direct_inter_service"},
+		{mode: gyokaAuthDisabled, want: "disabled", wantCredential: "disabled"},
+		{mode: gyokaAuthPassword, want: "pds_proxy_password", wantCredential: "app_password"},
+		{mode: gyokaAuthInterService, want: "direct_inter_service", wantCredential: "private_key"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			if got := tt.mode.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+			if got := tt.mode.credentialType(); got != tt.wantCredential {
+				t.Errorf("credentialType() = %q, want %q", got, tt.wantCredential)
 			}
 		})
 	}
@@ -242,13 +307,20 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 			}
 
 			configDir := t.TempDir()
+			configBody := tt.configBody
+			if tt.privateKey != "" {
+				if err := os.WriteFile(filepath.Join(configDir, "private.key"), []byte(tt.privateKey), 0600); err != nil {
+					t.Fatalf("write private key: %v", err)
+				}
+				configBody += "privateKeyFile: private.key\n"
+			}
 			if tt.configBody != "" {
-				if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte(tt.configBody), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte(configBody), 0600); err != nil {
 					t.Fatalf("write gyoka config: %v", err)
 				}
 			}
 
-			config, err := loadGyokaProjectionConfig(configDir, tt.appPassword, tt.privateKey)
+			config, err := loadGyokaProjectionConfig(configDir, tt.appPassword)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("loadGyokaProjectionConfig() error = %v, want %v", err, tt.wantErr)
@@ -288,7 +360,7 @@ func TestLoadGyokaProjectionConfig(t *testing.T) {
 func TestLoadGyokaProjectionConfigForStartup(t *testing.T) {
 	configDir := t.TempDir()
 
-	config, enabled, err := loadGyokaProjectionConfigForStartup(configDir, "", "")
+	config, enabled, err := loadGyokaProjectionConfigForStartup(configDir, "")
 	if !errors.Is(err, ErrGyokaConfigNotFound) {
 		t.Fatalf("loadGyokaProjectionConfigForStartup() error = %v, want %v", err, ErrGyokaConfigNotFound)
 	}
@@ -302,7 +374,8 @@ func TestLoadGyokaProjectionConfigForStartup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "gyoka.yaml"), []byte("host: gyoka.example.com\nuserIdentity: yuge.bsky.social\n"), 0600); err != nil {
 		t.Fatalf("write gyoka config: %v", err)
 	}
-	config, enabled, err = loadGyokaProjectionConfigForStartup(configDir, "app-password", "")
+	t.Setenv("GYOKA_PRIVATE_KEY", "invalid")
+	config, enabled, err = loadGyokaProjectionConfigForStartup(configDir, "app-password")
 	if err != nil {
 		t.Fatalf("loadGyokaProjectionConfigForStartup() error = %v", err)
 	}

@@ -100,6 +100,21 @@ go install github.com/nus25/yuge/cmd/yuge_subscriber
 
   通常運用では import flag は不要です。
 
+### Gyoka の認証
+
+サービス間認証では、設定ディレクトリの `gyoka.yaml` に秘密鍵ファイルを指定します。
+
+```yaml
+directHost: https://gyoka-editor.example.com
+audience: did:web:gyoka-editor.example.com#gyoka_editor
+userIdentity: did:web:yuge-client.example.com
+privateKeyFile: /run/secrets/gyoka-private-key
+```
+
+秘密鍵ファイルは Multibase 形式とし、実行ユーザーだけが読み取れる権限で管理してください。相対パスは `gyoka.yaml` のディレクトリを基準に解決します。コンテナではファイルを読み取り専用でマウントし、コンテナ内のパスを指定してください。鍵の変更には再起動が必要です。
+
+`privateKeyFile` が指定されている場合は `GYOKA_APP_PASSWORD` より優先されます。読み込みや解析に失敗した場合、Gyoka projection は無効化され、subscriber は起動を続けます。`privateKeyFile` を指定しない場合は `GYOKA_APP_PASSWORD` を使えます。以前の `GYOKA_PRIVATE_KEY` は使用されないため、鍵ファイルへの移行が必要です。
+
 ### Jetstream カーソル
 
 受信済みカーソルは `DATA_DIR`（`--data-directory-path`、既定値 `./data`）の
